@@ -132,14 +132,57 @@ var DateSelectorPlugin = class extends import_obsidian.Plugin {
             console.log("Found date in clicked element, opening modal");
             evt.preventDefault();
             evt.stopPropagation();
-            const dateStart = line.indexOf(foundDate);
-            if (dateStart >= 0) {
+            
+            // Use position information to find the correct date occurrence
+            // Instead of just using indexOf which only finds first occurrence
+            
+            // Get all occurrences of this date in the line
+            const dateRegex = new RegExp(foundDate.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g');
+            const matches = Array.from(line.matchAll(dateRegex));
+            console.log('All date matches:', matches);
+            
+            // Find the occurrence closest to the cursor position
+            let closestMatch = null;
+            let minDistance = Infinity;
+            
+            for (const match of matches) {
+              const matchStart = match.index;
+              const matchEnd = matchStart + match[0].length;
+              const distance = Math.min(
+                Math.abs(cursor.ch - matchStart),
+                Math.abs(cursor.ch - matchEnd)
+              );
+              
+              console.log('Match distance:', {match: match[0], start: matchStart, end: matchEnd, distance});
+              
+              if (distance < minDistance) {
+                closestMatch = match;
+                minDistance = distance;
+              }
+            }
+            
+            if (closestMatch) {
+              const dateStart = closestMatch.index;
+              console.log('Using closest match:', {match: closestMatch[0], position: dateStart});
+              
               this.openDateModal(
                 editor,
                 foundDate,
                 { line: linePos.line, ch: dateStart },
                 { line: linePos.line, ch: dateStart + foundDate.length }
               );
+            } else {
+              // Fallback to the old method if no match found (shouldn't happen)
+              const dateStart = line.indexOf(foundDate);
+              if (dateStart >= 0) {
+                console.log('Falling back to first occurrence at:', dateStart);
+                this.openDateModal(
+                  editor,
+                  foundDate,
+                  { line: linePos.line, ch: dateStart },
+                  { line: linePos.line, ch: dateStart + foundDate.length }
+                );
+              }
             }
           }
         } catch (error) {
@@ -158,9 +201,11 @@ var DateSelectorPlugin = class extends import_obsidian.Plugin {
     console.log("Saved settings:", this.settings);
   }
   // Helper function to open the modal
-  openDateModal(editor, currentDateString, replaceStart, replaceEnd) {
+  openDateModal(editor, currentDateString, replaceStart, replaceEnd, needsSpace = false) {
     new DateSelectorModal(this.app, currentDateString, this.settings.outputFormat, (newDate) => {
-      editor.replaceRange(newDate, replaceStart, replaceEnd);
+      // Add a space before the date if needed
+      const dateToInsert = needsSpace ? ' ' + newDate : newDate;
+      editor.replaceRange(dateToInsert, replaceStart, replaceEnd);
     }).open();
   }
   // Helper function to find a date at a given position in text
@@ -312,7 +357,30 @@ var DateSuggester = class extends import_obsidian.EditorSuggest {
     }
     
     this.close();
-    this.plugin.openDateModal(editor, null, startPos, endPos);
+    
+    // Check if we need to add a space before the date
+    const line = editor.getLine(startPos.line);
+    const atSymbolPos = startPos.ch; // This is where the @ symbol is
+    
+    let needsSpace = false;
+    // Check if there's a character before the @ and it's not a space
+    if (atSymbolPos > 0) {
+      const charBeforeAt = line.charAt(atSymbolPos - 1);
+      // If there's a character before @ and it's not a space or beginning of line
+      if (charBeforeAt && charBeforeAt !== ' ' && charBeforeAt !== '\t') {
+        console.log('Character before @:', charBeforeAt);
+        needsSpace = true;
+      }
+    }
+    
+    // Open the date modal with appropriate handling for spacing
+    this.plugin.openDateModal(
+      editor, 
+      null, 
+      startPos,  // Start includes the @ symbol
+      endPos,    // End is the cursor position
+      needsSpace // Pass the spacing flag
+    );
   }
 };
 var DateSelectorSettingTab = class extends import_obsidian.PluginSettingTab {
