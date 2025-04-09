@@ -1,0 +1,10 @@
+{
+    "id": "obsidian-date-selector",
+    "name": "Date Selector",
+    "version": "1.0.0",
+    "minAppVersion": "0.15.0",
+    "description": "Select dates using @ trigger or by clicking existing dates",
+    "author": "Your Name",
+    "authorUrl": "",
+    "isDesktopOnly": false
+} 
