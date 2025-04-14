@@ -5,6 +5,7 @@ import {
     EditorSuggest,
     EditorSuggestContext,
     EditorSuggestTriggerInfo,
+    EventRef,
     MarkdownView,
     MarkdownFileInfo,
     Modal,
@@ -17,10 +18,12 @@ import {
 
 interface DateSelectorSettings {
     outputFormat: string;
+    enableAtTrigger: boolean;
 }
 
 const DEFAULT_SETTINGS: DateSelectorSettings = {
-    outputFormat: 'MM/DD/YYYY' // Default to US format
+    outputFormat: 'MM/DD/YYYY', // Default to US format
+    enableAtTrigger: true // Enable @ trigger by default
 };
 
 const DATE_FORMATS = {
@@ -37,23 +40,25 @@ interface DateSuggestion {
     label: string;
 }
 
+const LAST_UPDATED = '2025-04-10T12:00:00Z'; // Update this manually when changes are made
+
 // The main plugin class
 export default class DateSelectorPlugin extends Plugin {
     settings: DateSelectorSettings;
+    dateSuggester: DateSuggester | null = null;
+    private editorChangeRef: EventRef | null = null;
 
     async onload() {
         console.log('Loading Date Selector Plugin');
         
-        // Load settings first
         await this.loadSettings();
-
-        // Add the settings tab
         this.addSettingTab(new DateSelectorSettingTab(this.app, this));
+        
+        // Only create and register if enabled
+        if (this.settings.enableAtTrigger) {
+            this.setupAtTrigger();
+        }
 
-        // Register the EditorSuggest component for @ trigger
-        this.registerEditorSuggest(new DateSuggester(this.app, this));
-
-        // Command for Manual Trigger
         this.addCommand({
             id: 'insert-update-date-command',
             name: 'Insert or Update Date (Command)',
@@ -63,71 +68,16 @@ export default class DateSelectorPlugin extends Plugin {
             }
         });
 
-        // Register click handler for dates in the document
         this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-            console.log('Click event detected');
-            const target = evt.target as HTMLElement;
-            const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-
-            if (!view || !target) {
-                console.log('No view or target found', { hasView: !!view, hasTarget: !!target });
-                return;
-            }
-
-            const isEditorClick = target.closest('.cm-editor') !== null;
-            console.log('Is editor click:', isEditorClick, 'Target:', target.tagName, target.className);
-
-            if (isEditorClick) {
-                const editor = view.editor;
-                console.log('Got editor instance');
-                
-                try {
-                    // Get the clicked element's text content
-                    const clickedText = target.textContent || '';
-                    console.log('Clicked element text:', clickedText);
-
-                    // If we didn't click directly on text, don't proceed
-                    if (!clickedText.trim()) {
-                        console.log('No text content in clicked element');
-                        return;
-                    }
-
-                    // Get the position from the editor's coordinate system
-                    const cursor = editor.getCursor();
-                    const pos = editor.posToOffset(cursor);
-                    if (pos === null) {
-                        console.log('Could not get position offset');
-                        return;
-                    }
-
-                    const linePos = editor.offsetToPos(pos);
-                    const line = editor.getLine(linePos.line);
-                    
-                    // Find the date in the clicked text first
-                    const { foundDate, start, end } = this.findDateAtPosition(clickedText, clickedText.length/2);
-                    console.log('Date search in clicked element:', { foundDate, start, end });
-
-                    if (foundDate && clickedText.includes(foundDate)) {
-                        console.log('Found date in clicked element, opening modal');
-                        evt.preventDefault();
-                        evt.stopPropagation();
-
-                        // Find where this date is in the actual line
-                        const dateStart = line.indexOf(foundDate);
-                        if (dateStart >= 0) {
-                            this.openDateModal(editor, foundDate, 
-                                { line: linePos.line, ch: dateStart }, 
-                                { line: linePos.line, ch: dateStart + foundDate.length }
-                            );
-                        }
-                    }
-                } catch (error) {
-                    console.error('Error in click handler:', error);
-                }
-            }
+            this.handleClickEvent(evt);
         });
 
-        console.log('Date Selector Plugin Loaded');
+        const currentTime = new Date().toISOString();
+        console.log(`Date Selector Plugin Loaded - Timestamp: ${currentTime}`);
+        console.log(`Date Selector Plugin Loaded - Last Updated: ${LAST_UPDATED}`);
+        // Define BUILD_TIMESTAMP or remove this line if unnecessary
+                const BUILD_TIMESTAMP = new Date().toISOString();
+                console.log(`Date Selector Plugin Loaded - Build Timestamp: ${BUILD_TIMESTAMP}`);
     }
 
     async loadSettings() {
@@ -142,15 +92,27 @@ export default class DateSelectorPlugin extends Plugin {
 
     // Helper function to open the modal
     openDateModal(editor: Editor, currentDateString: string | null, replaceStart: EditorPosition, replaceEnd: EditorPosition) {
-        new DateSelectorModal(this.app, currentDateString, this.settings.outputFormat, (newDate) => {
-            editor.replaceRange(newDate, replaceStart, replaceEnd);
-        }).open();
+        new DateSelectorModal(
+            this.app,
+            currentDateString,
+            this.settings.outputFormat,
+            (newDate) => {
+                // Always add asterisks around the date
+                const formattedDate = `*${newDate}*`;
+                editor.replaceRange(formattedDate, replaceStart, replaceEnd);
+
+                // Move the cursor to the far right of the date, outside the asterisks
+                const cursorPosition = {
+                    line: replaceStart.line,
+                    ch: replaceStart.ch + formattedDate.length
+                };
+                editor.setCursor(cursorPosition);
+            }
+        ).open();
     }
 
     // Helper function to find a date at a given position in text
     findDateAtPosition(line: string, ch: number): { foundDate: string | null, start: number, end: number } {
-        console.log('Finding date in line:', line, 'at position:', ch);
-        
         // Match common date formats - order matters, more specific first
         const dateFormats = [
             /\b\d{4}-\d{2}-\d{2}\b/, // YYYY-MM-DD
@@ -162,27 +124,146 @@ export default class DateSelectorPlugin extends Plugin {
         ];
 
         for (const format of dateFormats) {
-            console.log('Trying format:', format);
             const matches = Array.from(line.matchAll(new RegExp(format, 'g')));
             
             for (const match of matches) {
-                const start = match.index!;
-                const end = start + match[0].length;
-                console.log('Found match:', { match: match[0], start, end, cursorAt: ch });
+                const dateStart = match.index!;
+                const dateEnd = dateStart + match[0].length;
                 
-                if (ch >= start && ch <= end) {
-                    console.log('Cursor is within match');
-                    return { foundDate: match[0], start, end };
+                // Check if cursor is strictly inside the date (not at boundaries)
+                if (ch > dateStart && ch < dateEnd) {
+                    // Check for surrounding asterisks
+                    const hasStartAsterisk = dateStart > 0 && line[dateStart - 1] === '*';
+                    const hasEndAsterisk = dateEnd < line.length && line[dateEnd] === '*';
+                    
+                    // Adjust start and end positions to include asterisks if they exist
+                    const start = hasStartAsterisk ? dateStart - 1 : dateStart;
+                    const end = hasEndAsterisk ? dateEnd + 1 : dateEnd;
+                    
+                    // Include asterisks in the found date if they exist
+                    const foundDate = line.substring(start, end);
+                    
+                    return { foundDate, start, end };
                 }
             }
         }
         
-        console.log('No date found at cursor position');
         return { foundDate: null, start: -1, end: -1 };
+    }
+
+    async handleClickEvent(evt: MouseEvent) {
+        try {
+            const target = evt.target as HTMLElement;
+            const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+
+            if (!view || !target) return;
+
+            const isEditorClick = target.closest('.cm-editor') !== null;
+
+            if (isEditorClick) {
+                const editor = view.editor;
+                if (!editor) {
+                    console.log('No editor instance available');
+                    return;
+                }
+
+                // Safer approach - use the editor's current cursor position
+                // which should be updated on click
+                const pos = editor.getCursor();
+                if (!pos) {
+                    console.log('Could not get cursor position');
+                    return;
+                }
+
+                // Make sure we can get the line
+                try {
+                    const line = editor.getLine(pos.line);
+                    if (!line) {
+                        console.log('No line content at position', pos.line);
+                        return;
+                    }
+
+                    const { foundDate, start, end } = this.findDateAtPosition(line, pos.ch);
+
+                    if (foundDate) {
+                        evt.preventDefault();
+                        evt.stopPropagation();
+                        this.openDateModal(editor, foundDate, { line: pos.line, ch: start }, { line: pos.line, ch: end });
+                    }
+                } catch (lineError) {
+                    console.error('Error getting line content:', lineError);
+                }
+            }
+        } catch (error) {
+            console.error('Error in click handler:', error);
+        }
+    }
+
+    private setupAtTrigger() {
+        // Create new suggester instance
+        this.dateSuggester = new DateSuggester(this.app, this);
+        this.registerEditorSuggest(this.dateSuggester);
+    }
+
+    private cleanupAtTrigger() {
+        // Ensure the problematic listener cleanup is removed
+        if (this.editorChangeRef) {
+            this.app.workspace.offref(this.editorChangeRef);
+            this.editorChangeRef = null;
+        }
+
+        // Clean up suggester
+        if (this.dateSuggester) {
+            // Unregister the suggester from the workspace
+            const editorSuggest = (this.app.workspace as any).editorSuggest;
+            if (editorSuggest?.suggests) {
+                const index = editorSuggest.suggests.indexOf(this.dateSuggester);
+                if (index > -1) {
+                    editorSuggest.suggests.splice(index, 1);
+                }
+            }
+            
+            // Close any open suggestions
+            this.dateSuggester.close();
+            this.dateSuggester = null;
+        }
+    }
+
+    // Method to update @ trigger functionality based on settings
+    updateAtTriggerState() {
+        // Clean up existing
+        this.cleanupAtTrigger();
+
+        // Setup new if enabled
+        if (this.settings.enableAtTrigger) {
+            this.setupAtTrigger();
+        }
+    }
+
+    onunload() {
+        console.log('Unloading Date Selector Plugin');
+        // Clean up all event listeners and suggesters
+        this.cleanupAtTrigger();
+        // Ensure any remaining event listeners are cleaned up
+        this.app.workspace.trigger('editor-change');
+    }
+
+    // Removed the call to `this.trigger` as it is undefined and unnecessary
+    checkForTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): void {
+        const triggerInfo = this.dateSuggester?.onTrigger(cursor, editor, file);
+        if (triggerInfo) {
+            console.log('Trigger info:', triggerInfo);
+        }
     }
 }
 
-// The EditorSuggest class to handle the '@' trigger
+// Define the structure of your suggestion items
+interface DateSuggestion {
+    display: string; // Text to show in the suggestion list
+    value: string;   // Value to insert when suggestion is selected
+}
+
+// Refactor the DateSuggester class to follow the recommended implementation
 class DateSuggester extends EditorSuggest<DateSuggestion> {
     plugin: DateSelectorPlugin;
 
@@ -191,53 +272,91 @@ class DateSuggester extends EditorSuggest<DateSuggestion> {
         this.plugin = plugin;
     }
 
+    // Determines if the suggestion modal should open
     onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
-        const currentLine = editor.getLine(cursor.line);
-        const currentPos = cursor.ch;
+        const line = editor.getLine(cursor.line);
 
-        // Check if we just typed '@' or if we're right after an '@'
-        if (currentLine[currentPos - 1] === '@') {
+        // Trigger when the character just typed is '@'
+        // Check cursor position first to avoid negative index
+        if (cursor.ch > 0 && line[cursor.ch - 1] === '@') {
             return {
-                start: { line: cursor.line, ch: currentPos - 1 },
-                end: { line: cursor.line, ch: currentPos },
-                query: '',
-            };
-        }
-
-        // Also check if we're somewhere after an '@' (for when backspacing or moving cursor)
-        const beforeCursor = currentLine.substring(0, currentPos);
-        const lastAtPos = beforeCursor.lastIndexOf('@');
-        if (lastAtPos >= 0) {
-            return {
-                start: { line: cursor.line, ch: lastAtPos },
-                end: { line: cursor.line, ch: currentPos },
-                query: beforeCursor.substring(lastAtPos + 1),
+                start: { line: cursor.line, ch: cursor.ch - 1 }, // Start before the '@'
+                end: { line: cursor.line, ch: cursor.ch },      // End after the '@'
+                query: ''
             };
         }
 
         return null;
     }
 
-    getSuggestions(context: EditorSuggestContext): DateSuggestion[] {
-        return [{ label: 'Pick a date...' }];
+    // Provides the list of suggestions based on the current context
+    async getSuggestions(context: EditorSuggestContext): Promise<DateSuggestion[]> {
+        const query = context.query.toLowerCase();
+
+        // Example: Static list of date suggestions
+        const allSuggestions: DateSuggestion[] = [
+            { display: 'Today', value: moment().format(this.plugin.settings.outputFormat), label: 'Today' },
+            { display: 'Tomorrow', value: moment().add(1, 'day').format(this.plugin.settings.outputFormat), label: 'Tomorrow' },
+            { display: 'Yesterday', value: moment().subtract(1, 'day').format(this.plugin.settings.outputFormat), label: 'Yesterday' },
+            { display: 'Pick a date...', value: '', label: 'PICKER' } // Special suggestion
+        ];
+
+        // Filter suggestions based on the query
+        return allSuggestions.filter(suggestion =>
+            suggestion.display.toLowerCase().includes(query)
+        );
     }
 
+    // Renders how each suggestion item looks in the list
     renderSuggestion(suggestion: DateSuggestion, el: HTMLElement): void {
-        el.setText(suggestion.label);
+        el.empty();
+        el.createEl('div', { text: suggestion.display });
     }
 
+    // Called when the user selects a suggestion
     selectSuggestion(suggestion: DateSuggestion, evt: MouseEvent | KeyboardEvent): void {
-        const editor = this.context?.editor;
-        const startPos = this.context?.start;
-        const endPos = this.context?.end;
+        if (!this.context) return;
 
-        if (!editor || !startPos || !endPos) {
-            console.error("Editor context not available in selectSuggestion");
-            return;
+        // Check if it's the special "Pick a date..." suggestion
+        if (suggestion.label === 'PICKER') {
+            // We need the context *before* closing
+            const editor = this.context.editor;
+            const start = this.context.start;
+            const end = this.context.end;
+            
+            // Open the date modal using the captured context
+            this.plugin.openDateModal(
+                editor,
+                null, // No current date string to pass
+                start, // Replace the '@' trigger
+                end
+            );
+            
+            // Now it's safe to close the suggester
+            this.close(); 
+            return; // Don't proceed with the default insertion
         }
 
+        // --- Default behavior for other suggestions ---
+
+        // Add asterisks around the selected date value
+        const formattedDate = `*${suggestion.value}*`;
+
+        this.context.editor.replaceRange(
+            formattedDate, // Use the asterisk-wrapped date
+            this.context.start,
+            this.context.end
+        );
+
+        // Optional: Move cursor after the inserted text and the closing asterisk
+        const newCursorPos = { 
+            line: this.context.start.line, 
+            ch: this.context.start.ch + formattedDate.length 
+        };
+        this.context.editor.setCursor(newCursorPos);
+
+        // Close the suggestion modal
         this.close();
-        this.plugin.openDateModal(editor, null, startPos, endPos);
     }
 }
 
@@ -260,7 +379,6 @@ class DateSelectorSettingTab extends PluginSettingTab {
             .setName('Date Format')
             .setDesc('Choose the format for dates when inserting or updating')
             .addDropdown(dropdown => {
-                // Add all format options
                 Object.entries(DATE_FORMATS).forEach(([name, format]) => {
                     dropdown.addOption(format, name);
                 });
@@ -272,6 +390,17 @@ class DateSelectorSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     });
             });
+
+        new Setting(containerEl)
+            .setName('Enable @ Symbol Trigger')
+            .setDesc('When enabled, typing @ will show a date picker suggestion. When disabled, you can only use the date picker by clicking on existing dates.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.enableAtTrigger)
+                .onChange(async (value) => {
+                    this.plugin.settings.enableAtTrigger = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.updateAtTriggerState();
+                }));
     }
 }
 
@@ -303,9 +432,12 @@ class DateSelectorModal extends Modal {
                 'MM/DD/YY'
             ];
             
-            if (this.currentDateString) {
+            // Remove asterisks for parsing if they exist
+            const dateStr = this.currentDateString?.replace(/^\*|\*$/g, '') || null;
+            
+            if (dateStr) {
                 // Try to parse with moment using multiple formats
-                const parsedDate = moment(this.currentDateString, formats, true);
+                const parsedDate = moment(dateStr, formats, true);
                 if (parsedDate.isValid()) {
                     // Store internally as YYYY-MM-DD for the input element
                     this.selectedDate = parsedDate.format('YYYY-MM-DD');
@@ -327,13 +459,11 @@ class DateSelectorModal extends Modal {
         contentEl.addClass('date-selector-modal');
         contentEl.createEl('h2', { text: 'Select a Date' });
 
-        console.log('Creating date input...');
         const dateInput = contentEl.createEl('input', { 
             type: 'date', 
             cls: 'date-selector-input'
         });
         dateInput.value = this.selectedDate;
-        console.log('Date input created:', dateInput);
 
         dateInput.addEventListener('change', (evt) => {
             this.selectedDate = (evt.target as HTMLInputElement).value;
@@ -352,60 +482,14 @@ class DateSelectorModal extends Modal {
                             return;
                         }
                         this.close();
-                        // Use the selected format from settings
+                        
+                        // Format the date according to settings
                         const formattedDate = moment(this.selectedDate).format(this.outputFormat);
                         this.onSubmit(formattedDate);
                     }));
 
-        // Focus and open date picker with multiple attempts
-        setTimeout(() => {
-            console.log('Initial timeout fired');
-            dateInput.focus();
-            console.log('Input focused');
-
-            // Try multiple selectors to find the calendar button
-            const selectors = [
-                '[title="show date picker"]',
-                'input[type="date"]::-webkit-calendar-picker-indicator',
-                '.calendar-button',
-                'button.date-picker-button'
-            ];
-
-            console.log('Trying to find calendar button...');
-            let calendarButton = null;
-
-            for (const selector of selectors) {
-                console.log('Trying selector:', selector);
-                const element = dateInput.parentElement?.querySelector(selector);
-                if (element) {
-                    console.log('Found button with selector:', selector);
-                    calendarButton = element;
-                    break;
-                }
-            }
-
-            if (calendarButton) {
-                console.log('Calendar button found, attempting to click');
-                try {
-                    (calendarButton as HTMLElement).click();
-                    console.log('Click attempted');
-                } catch (e) {
-                    console.error('Error clicking calendar button:', e);
-                }
-            } else {
-                console.log('No calendar button found with any selector');
-                // Try alternative approach - simulate keyboard event
-                console.log('Trying keyboard event...');
-                dateInput.dispatchEvent(new KeyboardEvent('keydown', { 
-                    key: 'ArrowDown',
-                    code: 'ArrowDown',
-                    keyCode: 40,
-                    which: 40,
-                    altKey: true,
-                    bubbles: true
-                }));
-            }
-        }, 200); // Increased timeout
+        // Focus the date input
+        dateInput.focus();
     }
 
     onClose() {
@@ -413,3 +497,4 @@ class DateSelectorModal extends Modal {
         contentEl.empty();
     }
 }
+

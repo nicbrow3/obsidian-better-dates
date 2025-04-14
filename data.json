@@ -1,3 +1,4 @@
 {
-  "outputFormat": "MM/DD/YY"
+  "outputFormat": "MM/DD/YY",
+  "enableAtTrigger": true
 }

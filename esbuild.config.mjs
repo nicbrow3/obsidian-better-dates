@@ -10,6 +10,7 @@ if you want to view the source, please visit the github repository of this plugi
 `;
 
 const prod = (process.argv[2] === 'production');
+const buildTimestamp = new Date().toISOString();
 
 const context = await esbuild.context({
     banner: {
@@ -17,6 +18,9 @@ const context = await esbuild.context({
     },
     entryPoints: ['src/main.ts'],
     bundle: true,
+    define: {
+        BUILD_TIMESTAMP: JSON.stringify(buildTimestamp),
+    },
     external: [
         'obsidian',
         'electron',
@@ -45,4 +49,4 @@ if (prod) {
     process.exit(0);
 } else {
     await context.watch();
-} 
+}
