@@ -66,7 +66,9 @@ var DateSelectorPlugin = class extends import_obsidian.Plugin {
       if (!/^\*.*\*$/.test(formattedDate)) {
         formattedDate = `*${formattedDate}*`;
       }
-      editor.replaceRange(formattedDate + " ", replaceStart, replaceEnd);
+      const line = editor.getLine(replaceEnd.line);
+      const hasSpaceAfter = line.length > replaceEnd.ch && line[replaceEnd.ch] === " ";
+      editor.replaceRange(formattedDate + (hasSpaceAfter ? "" : " "), replaceStart, replaceEnd);
     }).open();
   }
   async handleClickEvent(evt) {
@@ -133,7 +135,9 @@ var DateSelectorPlugin = class extends import_obsidian.Plugin {
       const start = match.index;
       const end = start + match[0].length;
       const datePart = match[1];
-      if (ch >= start && ch <= end) {
+      const dateTextStart = start + 1;
+      const dateTextEnd = end - 1;
+      if (ch > dateTextStart && ch < dateTextEnd) {
         const parsed = (0, import_obsidian.moment)(datePart, supportedFormats, true);
         if (parsed.isValid()) {
           return {
@@ -252,7 +256,9 @@ var DateSuggester = class extends import_obsidian.EditorSuggest {
     }
     this.close();
     if (suggestion.isDate && suggestion.dateValue) {
-      const dateWithSpace = suggestion.dateValue + " ";
+      const line = editor.getLine(endPos.line);
+      const hasSpaceAfter = line.length > endPos.ch && line[endPos.ch] === " ";
+      const dateWithSpace = suggestion.dateValue + (hasSpaceAfter ? "" : " ");
       editor.replaceRange(dateWithSpace, startPos, endPos);
       const newCursorPos = { line: startPos.line, ch: startPos.ch + dateWithSpace.length };
       editor.setCursor(newCursorPos);
@@ -262,12 +268,13 @@ var DateSuggester = class extends import_obsidian.EditorSuggest {
   }
 };
 var DateSelectorModal = class extends import_obsidian.Modal {
-  // Store the picked date internally as YYYY-MM-DD
+  // Store the focused date for keyboard navigation
   constructor(app, initialDateYYYYMMDD, onSubmit) {
     super(app);
     this.initialDateYYYYMMDD = initialDateYYYYMMDD;
     this.onSubmit = onSubmit;
     this.selectedDateYYYYMMDD = (0, import_obsidian.moment)(this.initialDateYYYYMMDD, "YYYY-MM-DD", true).isValid() ? this.initialDateYYYYMMDD : (0, import_obsidian.moment)().format("YYYY-MM-DD");
+    this.focusedDate = (0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD", true).isValid() ? (0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD") : (0, import_obsidian.moment)();
   }
   onOpen() {
     var _a;
@@ -280,8 +287,9 @@ var DateSelectorModal = class extends import_obsidian.Modal {
     if (useCustomCalendar) {
       const calendarContainer = contentEl.createEl("div", { cls: "custom-calendar-container" });
       let currentMonth = (0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD", true).isValid() ? (0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD") : (0, import_obsidian.moment)();
-      let focusedDate = (0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD", true).isValid() ? (0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD") : (0, import_obsidian.moment)();
       const selectedDateHeader = contentEl.createEl("div", { cls: "calendar-selected-date-header" });
+      selectedDateHeader.style.marginTop = "1.2em";
+      selectedDateHeader.style.marginBottom = "1em";
       const updateSelectedDateHeader = () => {
         selectedDateHeader.setText("Selected: " + (0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD").format("MMM D, YYYY"));
       };
@@ -302,8 +310,11 @@ var DateSelectorModal = class extends import_obsidian.Modal {
         };
         const daysRow = calendarContainer.createEl("div", { cls: "calendar-days-row" });
         const daysShort = import_obsidian.moment.weekdaysShort();
-        daysShort.forEach((day) => {
-          daysRow.createEl("span", { text: day, cls: "calendar-day-label" });
+        daysShort.forEach((day, index) => {
+          const dayLabel = daysRow.createEl("span", { text: day, cls: "calendar-day-label" });
+          if (index === 0 || index === 6) {
+            dayLabel.addClass("calendar-day-label-weekend");
+          }
         });
         const datesGrid = calendarContainer.createEl("div", { cls: "calendar-dates-grid" });
         const startOfMonth = currentMonth.clone().startOf("month");
@@ -319,35 +330,57 @@ var DateSelectorModal = class extends import_obsidian.Modal {
             const dateStr = date.format("YYYY-MM-DD");
             const isCurrentMonth = date.month() === currentMonth.month();
             const dateBtn = weekRow.createEl("button", { text: String(date.date()), cls: "calendar-date-btn" });
+            if (day === 0 || day === 6) {
+              dateBtn.addClass("calendar-date-weekend");
+            }
             if (!isCurrentMonth) {
               dateBtn.addClass("calendar-date-outside");
             }
             if (dateStr === this.selectedDateYYYYMMDD) {
               dateBtn.addClass("calendar-date-selected");
             }
+            dateBtn.removeAttribute("data-focused-date");
+            if (dateStr === this.focusedDate.format("YYYY-MM-DD")) {
+              dateBtn.addClass("calendar-date-focused");
+              dateBtn.setAttr("data-focused-date", "true");
+            }
             if (date.isSame((0, import_obsidian.moment)(), "day")) {
               dateBtn.addClass("calendar-date-today");
             }
-            if (dateStr === focusedDate.format("YYYY-MM-DD")) {
-              dateBtn.addClass("calendar-date-focused");
-            }
             dateBtn.onclick = () => {
               if (!date.isSame(currentMonth, "month")) {
+                this.selectedDateYYYYMMDD = dateStr;
+                this.focusedDate = date.clone();
                 currentMonth = date.clone();
+                updateSelectedDateHeader();
                 renderCalendar();
+                return;
               }
               this.selectedDateYYYYMMDD = dateStr;
-              focusedDate = date.clone();
+              this.focusedDate = date.clone();
               updateSelectedDateHeader();
+            };
+            dateBtn.ondblclick = () => {
+              this.selectedDateYYYYMMDD = dateStr;
+              this.close();
+              this.onSubmit(this.selectedDateYYYYMMDD);
             };
           }
         }
+        setTimeout(() => {
+          calendarContainer.querySelectorAll("button[data-focused-date]").forEach((btn) => btn.removeAttribute("data-focused-date"));
+          const focusedBtn = calendarContainer.querySelector("button.calendar-date-focused");
+          if (focusedBtn) {
+            focusedBtn.setAttribute("data-focused-date", "true");
+            focusedBtn.focus();
+          }
+        }, 0);
       };
       renderCalendar();
       const handleKeyDown = (evt) => {
         let handled = false;
         if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(evt.key)) {
-          let newFocus = focusedDate.clone();
+          let newFocus = this.focusedDate.clone();
           if (evt.key === "ArrowLeft") newFocus.subtract(1, "day");
           if (evt.key === "ArrowRight") newFocus.add(1, "day");
           if (evt.key === "ArrowUp") newFocus.subtract(7, "day");
@@ -355,13 +388,14 @@ var DateSelectorModal = class extends import_obsidian.Modal {
           if (!newFocus.isSame(currentMonth, "month")) {
             currentMonth = newFocus.clone();
           }
-          focusedDate = newFocus;
+          this.focusedDate = newFocus;
           renderCalendar();
           handled = true;
         } else if (evt.key === "Enter") {
-          this.selectedDateYYYYMMDD = focusedDate.format("YYYY-MM-DD");
+          this.selectedDateYYYYMMDD = this.focusedDate.format("YYYY-MM-DD");
           updateSelectedDateHeader();
-          renderCalendar();
+          this.close();
+          this.onSubmit(this.selectedDateYYYYMMDD);
           handled = true;
         } else if (evt.key === "Escape") {
           this.close();
@@ -380,23 +414,176 @@ var DateSelectorModal = class extends import_obsidian.Modal {
       this.scope.register([], "Escape", handleKeyDown);
       const style = document.createElement("style");
       style.textContent = `
-                .custom-calendar-container { margin: 2em 0 1em 0; padding: 0.5em 1em 1em 1em; min-width: 420px; min-height: 340px; display: flex; flex-direction: column; align-items: center; }
-                .calendar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.2em; width: 100%; }
-                .calendar-nav-btn { background: none; border: none; font-size: 1.6em; cursor: pointer; padding: 0 0.7em; color: #b3aaff; transition: color 0.15s; }
+                .date-selector-modal {
+                    width: auto !important;
+                    max-width: none !important;
+                    min-width: 0 !important;
+                    margin: 0 auto !important;
+                    box-sizing: border-box;
+                    padding: 2em !important;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                }
+                .custom-calendar-container {
+                    margin: 0 auto;
+                    padding: 0;
+                    min-height: 340px;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    width: auto;
+                    box-sizing: border-box;
+                }
+                .calendar-header { 
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: space-between; 
+                    margin-bottom: 1.2em; 
+                    width: 100%;
+                    box-sizing: border-box;
+                }
+                .calendar-nav-btn { 
+                    background: none; 
+                    border: none; 
+                    font-size: 1.6em; 
+                    cursor: pointer; 
+                    padding: 0 0.7em; 
+                    color: #b3aaff; 
+                    transition: color 0.15s; 
+                }
                 .calendar-nav-btn:hover { color: #a48cff; }
                 .calendar-month-year { font-weight: bold; font-size: 1.3em; letter-spacing: 0.02em; color: #fff; }
-                .calendar-selected-date-header { margin-bottom: 1em; font-size: 1.1em; color: #6d7cff; width: 100%; text-align: left; }
-                .calendar-days-row { display: flex; justify-content: space-between; margin-bottom: 0.3em; width: 100%; }
-                .calendar-day-label { width: 2.8em; height: 2.2em; text-align: center; font-size: 1.1em; color: #b3b3c6; font-weight: 600; letter-spacing: 0.01em; display: flex; align-items: center; justify-content: center; }
-                .calendar-dates-grid { display: flex; flex-direction: column; width: 100%; }
-                .calendar-week-row { display: flex; width: 100%; }
-                .calendar-date-blank { width: 2.8em; height: 2.8em; }
-                .calendar-date-btn { width: 2.8em; height: 2.8em; margin: 2px; border: none; border-radius: 8px; background: none; cursor: pointer; transition: background 0.15s, color 0.15s, box-shadow 0.15s; font-size: 1.1em; color: #e3e3f7; font-weight: 500; display: flex; align-items: center; justify-content: center; }
-                .calendar-date-btn:hover, .calendar-date-btn:focus { background: #e3f0ff22; color: #a48cff; outline: none; box-shadow: 0 0 0 2px #a48cff55; }
-                .calendar-date-selected { background: #a48cff; color: #fff; font-weight: 700; }
-                .calendar-date-today { border: 2px solid #a48cff; }
-                .calendar-date-focused { box-shadow: 0 0 0 2px #a48cff99; }
-                .calendar-date-outside { color: #bbb; background: #23232b; filter: brightness(0.85); }
+                .calendar-selected-date-header { 
+                    margin-bottom: 1em; 
+                    font-size: 1.1em; 
+                    color: #6d7cff; 
+                    width: 100%; 
+                    text-align: left; 
+                    box-sizing: border-box;
+                }
+                .calendar-days-row {
+                    display: grid;
+                    grid-template-columns: repeat(7, minmax(0, 1fr));
+                    gap: 0.4em;
+                    margin-bottom: 0.3em;
+                    width: 100%;
+                    box-sizing: border-box;
+                }
+                .calendar-day-label { 
+                    box-sizing: border-box;
+                    text-align: center; 
+                    font-size: 1.1em; 
+                    color: #b3b3c6; 
+                    font-weight: 600; 
+                    letter-spacing: 0.01em; 
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: center;
+                    height: 2.2em;
+                }
+                .calendar-day-label-weekend {
+                    color: #a48cff;
+                }
+                .calendar-dates-grid { 
+                    display: grid; 
+                    grid-template-rows: repeat(6, 1fr); 
+                    gap: 0.4em; 
+                    width: 100%; 
+                    box-sizing: border-box;
+                }
+                .calendar-week-row {
+                    display: grid;
+                    grid-template-columns: repeat(7, minmax(0, 1fr));
+                    gap: 0.4em;
+                    width: 100%;
+                    box-sizing: border-box;
+                }
+                .calendar-date-blank { 
+                    width: 2.6em; 
+                    height: 2.6em; 
+                    box-sizing: border-box; 
+                }
+                
+                /* Base date button - current month weekday (lightest) */
+                .calendar-date-btn { 
+                    width: 2.6em;
+                    height: 2.6em;
+                    margin: 0; 
+                    border: none; 
+                    border-radius: 6px; 
+                    background: rgba(78, 87, 119, 0.2);
+                    cursor: pointer; 
+                    transition: background 0.15s, color 0.15s, box-shadow 0.15s; 
+                    font-size: 1.1em; 
+                    color: #e3e3f7; 
+                    font-weight: 500; 
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: center; 
+                    box-sizing: border-box;
+                    overflow: hidden;
+                }
+                
+                /* Current month weekend (darker than weekday) */
+                .calendar-date-weekend {
+                    background: rgba(50, 45, 75, 0.65) !important;
+                    color: #c8c3f5 !important;
+                }
+                
+                /* Surrounding months weekday (darker than current month weekend) */
+                .calendar-date-outside { 
+                    color: #aaa !important; 
+                    background: rgba(45, 45, 55, 0.65) !important;
+                }
+                
+                /* Surrounding months weekend (darkest) */
+                .calendar-date-outside.calendar-date-weekend {
+                    background: rgba(30, 30, 45, 0.85) !important;
+                    color: #9992b8 !important;
+                }
+                
+                .calendar-date-btn:hover, .calendar-date-btn:focus { 
+                    background: rgba(164, 140, 255, 0.2) !important; 
+                    color: #fff !important; 
+                    outline: none; 
+                    box-shadow: 0 0 0 2px rgba(164, 140, 255, 0.4) !important; 
+                }
+                
+                .calendar-date-selected { 
+                    background: #a48cff !important; 
+                    color: #fff !important; 
+                    font-weight: 700; 
+                    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) !important;
+                }
+                
+                .calendar-date-today { 
+                    border: 2px solid #a48cff !important; 
+                }
+                
+                .calendar-date-focused { 
+                    box-shadow: 0 0 0 2px rgba(164, 140, 255, 0.6) !important;
+                }
+
+                /* Full-width button styling */
+                .date-selector-modal .setting-item {
+                    width: 100%;
+                    border-top: none;
+                    padding: 0;
+                }
+                
+                .date-selector-modal .setting-item-control {
+                    width: 100%;
+                    justify-content: center;
+                }
+                
+                .date-selector-modal .setting-item-control button {
+                    width: 100%;
+                    margin: 0;
+                    height: 2.5em;
+                    font-size: 1.05em;
+                    font-weight: 500;
+                }
             `;
       contentEl.appendChild(style);
     } else {
@@ -406,15 +593,22 @@ var DateSelectorModal = class extends import_obsidian.Modal {
         this.selectedDateYYYYMMDD = evt.target.value;
       });
     }
-    contentEl.createEl("div", { attr: { style: "margin-top: 1rem;" } });
-    new import_obsidian.Setting(contentEl).addButton((btn) => btn.setButtonText("Confirm Date").setCta().onClick(() => {
+    contentEl.createEl("div", { attr: { style: "margin-top: 1rem; width: 100%;" } });
+    const confirmBtn = contentEl.createEl("button", {
+      text: "Confirm Date",
+      cls: "mod-cta confirm-date-button",
+      attr: {
+        style: "width: 100%; height: 2.8em; margin-top: 1em; font-size: 1.05em; font-weight: 500; border-radius: 6px;"
+      }
+    });
+    confirmBtn.addEventListener("click", () => {
       if (!this.selectedDateYYYYMMDD || !(0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD", true).isValid()) {
         console.error("Invalid date selected in modal:", this.selectedDateYYYYMMDD);
         return;
       }
       this.close();
       this.onSubmit(this.selectedDateYYYYMMDD);
-    }));
+    });
     setTimeout(() => {
       const input = contentEl.querySelector("input.date-selector-input");
       if (input) input.focus();

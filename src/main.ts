@@ -76,7 +76,12 @@ export default class DateSelectorPlugin extends Plugin {
             if (!/^\*.*\*$/.test(formattedDate)) {
                 formattedDate = `*${formattedDate}*`;
             }
-            editor.replaceRange(formattedDate + ' ', replaceStart, replaceEnd);
+            
+            // Check if there's already a space after the insertion point
+            const line = editor.getLine(replaceEnd.line);
+            const hasSpaceAfter = line.length > replaceEnd.ch && line[replaceEnd.ch] === ' ';
+            
+            editor.replaceRange(formattedDate + (hasSpaceAfter ? '' : ' '), replaceStart, replaceEnd);
         }).open();
     }
 
@@ -163,9 +168,14 @@ export default class DateSelectorPlugin extends Plugin {
             const start = match.index; // Start of the '*'
             const end = start + match[0].length; // End of the '*'
             const datePart = match[1];
+            
+            // Calculate the bounds of just the date text itself (excluding asterisks completely)
+            const dateTextStart = start + 1;  // Position immediately after the first asterisk
+            const dateTextEnd = end - 1;      // Position immediately before the last asterisk
 
-            // Check if the click position (ch) is within this date match
-            if (ch >= start && ch <= end) {
+            // Check if the click position (ch) is strictly within the date text only
+            // This will be very restrictive - must click directly on the date text
+            if (ch > dateTextStart && ch < dateTextEnd) {
                 // Validate the date part with moment against supported formats
                 const parsed = moment(datePart, supportedFormats, true);
                 if (parsed.isValid()) {
@@ -319,10 +329,14 @@ class DateSuggester extends EditorSuggest<DateSuggestion> {
         this.close(); // Close the suggestion popup
 
         if (suggestion.isDate && suggestion.dateValue) {
-            // Insert the formatted date directly, with a space after
-            const dateWithSpace = suggestion.dateValue + ' ';
+            // Check if there's already a space after the insertion point
+            const line = editor.getLine(endPos.line);
+            const hasSpaceAfter = line.length > endPos.ch && line[endPos.ch] === ' ';
+            
+            // Insert the formatted date directly, with a space after (if needed)
+            const dateWithSpace = suggestion.dateValue + (hasSpaceAfter ? '' : ' ');
             editor.replaceRange(dateWithSpace, startPos, endPos);
-             // Move cursor after the inserted date and space
+            // Move cursor after the inserted date and space
             const newCursorPos = { line: startPos.line, ch: startPos.ch + dateWithSpace.length };
             editor.setCursor(newCursorPos);
         } else {
@@ -339,6 +353,7 @@ class DateSelectorModal extends Modal {
     initialDateYYYYMMDD: string | null; // Expects YYYY-MM-DD or null
     onSubmit: (resultYYYYMMDD: string) => void; // Returns YYYY-MM-DD
     selectedDateYYYYMMDD: string; // Store the picked date internally as YYYY-MM-DD
+    focusedDate: moment.Moment; // Store the focused date for keyboard navigation
 
     constructor(app: App, initialDateYYYYMMDD: string | null, onSubmit: (resultYYYYMMDD: string) => void) {
         super(app);
@@ -349,6 +364,10 @@ class DateSelectorModal extends Modal {
         this.selectedDateYYYYMMDD = moment(this.initialDateYYYYMMDD, 'YYYY-MM-DD', true).isValid()
             ? this.initialDateYYYYMMDD!
             : moment().format('YYYY-MM-DD'); // Default to today if invalid/null
+        // Initialize focusedDate to the selected date (or today)
+        this.focusedDate = moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD', true).isValid()
+            ? moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD')
+            : moment();
     }
 
     onOpen() {
@@ -366,12 +385,12 @@ class DateSelectorModal extends Modal {
             let currentMonth = moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD', true).isValid()
                 ? moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD')
                 : moment();
-            let focusedDate = moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD', true).isValid()
-                ? moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD')
-                : moment();
+            // Use this.focusedDate instead of local focusedDate
 
             // Show selected date in header
             const selectedDateHeader = contentEl.createEl('div', { cls: 'calendar-selected-date-header' });
+            selectedDateHeader.style.marginTop = '1.2em';
+            selectedDateHeader.style.marginBottom = '1em';
             const updateSelectedDateHeader = () => {
                 selectedDateHeader.setText('Selected: ' + moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD').format('MMM D, YYYY'));
             };
@@ -397,8 +416,12 @@ class DateSelectorModal extends Modal {
                 // Days of week
                 const daysRow = calendarContainer.createEl('div', { cls: 'calendar-days-row' });
                 const daysShort = moment.weekdaysShort();
-                daysShort.forEach(day => {
-                    daysRow.createEl('span', { text: day, cls: 'calendar-day-label' });
+                daysShort.forEach((day, index) => {
+                    const dayLabel = daysRow.createEl('span', { text: day, cls: 'calendar-day-label' });
+                    // Add weekend class to Saturday (6) and Sunday (0)
+                    if (index === 0 || index === 6) {
+                        dayLabel.addClass('calendar-day-label-weekend');
+                    }
                 });
 
                 // Dates grid as table-like rows (7 columns per week)
@@ -420,32 +443,61 @@ class DateSelectorModal extends Modal {
                         const dateStr = date.format('YYYY-MM-DD');
                         const isCurrentMonth = date.month() === currentMonth.month();
                         const dateBtn = weekRow.createEl('button', { text: String(date.date()), cls: 'calendar-date-btn' });
+                        
+                        // Add weekend class to Saturday and Sunday
+                        if (day === 0 || day === 6) {
+                            dateBtn.addClass('calendar-date-weekend');
+                        }
+                        
                         if (!isCurrentMonth) {
                             dateBtn.addClass('calendar-date-outside');
                         }
                         if (dateStr === this.selectedDateYYYYMMDD) {
                             dateBtn.addClass('calendar-date-selected');
                         }
+                        // Remove data-focused-date from all buttons before setting
+                        dateBtn.removeAttribute('data-focused-date');
+                        if (dateStr === this.focusedDate.format('YYYY-MM-DD')) {
+                            dateBtn.addClass('calendar-date-focused');
+                            dateBtn.setAttr('data-focused-date', 'true');
+                        }
                         if (date.isSame(moment(), 'day')) {
                             dateBtn.addClass('calendar-date-today');
                         }
-                        if (dateStr === focusedDate.format('YYYY-MM-DD')) {
-                            dateBtn.addClass('calendar-date-focused');
-                        }
                         dateBtn.onclick = () => {
-                            // Only re-render if the month changes
+                            // If the clicked date is outside the current month, update selection and focus before switching months
                             if (!date.isSame(currentMonth, 'month')) {
+                                this.selectedDateYYYYMMDD = dateStr;
+                                this.focusedDate = date.clone();
                                 currentMonth = date.clone();
+                                updateSelectedDateHeader();
                                 renderCalendar();
+                                return;
                             }
                             // Always update selected date and header
                             this.selectedDateYYYYMMDD = dateStr;
-                            focusedDate = date.clone();
+                            this.focusedDate = date.clone();
                             updateSelectedDateHeader();
                             // Visually highlight selection (handled by re-render if month changed)
                         };
+
+                        // Add double-click handler to confirm date
+                        dateBtn.ondblclick = () => {
+                            this.selectedDateYYYYMMDD = dateStr;
+                            this.close();
+                            this.onSubmit(this.selectedDateYYYYMMDD);
+                        };
                     }
                 }
+                // After rendering, focus the button for the focused date
+                setTimeout(() => {
+                    calendarContainer.querySelectorAll('button[data-focused-date]').forEach(btn => btn.removeAttribute('data-focused-date'));
+                    const focusedBtn = calendarContainer.querySelector('button.calendar-date-focused') as HTMLButtonElement;
+                    if (focusedBtn) {
+                        focusedBtn.setAttribute('data-focused-date', 'true');
+                        focusedBtn.focus();
+                    }
+                }, 0);
             };
             renderCalendar();
 
@@ -453,7 +505,7 @@ class DateSelectorModal extends Modal {
             const handleKeyDown = (evt: KeyboardEvent) => {
                 let handled = false;
                 if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(evt.key)) {
-                    let newFocus = focusedDate.clone();
+                    let newFocus = this.focusedDate.clone();
                     if (evt.key === 'ArrowLeft') newFocus.subtract(1, 'day');
                     if (evt.key === 'ArrowRight') newFocus.add(1, 'day');
                     if (evt.key === 'ArrowUp') newFocus.subtract(7, 'day');
@@ -461,13 +513,15 @@ class DateSelectorModal extends Modal {
                     if (!newFocus.isSame(currentMonth, 'month')) {
                         currentMonth = newFocus.clone();
                     }
-                    focusedDate = newFocus;
+                    this.focusedDate = newFocus;
                     renderCalendar();
                     handled = true;
                 } else if (evt.key === 'Enter') {
-                    this.selectedDateYYYYMMDD = focusedDate.format('YYYY-MM-DD');
+                    this.selectedDateYYYYMMDD = this.focusedDate.format('YYYY-MM-DD');
                     updateSelectedDateHeader();
-                    renderCalendar();
+                    // Immediately confirm and close on Enter
+                    this.close();
+                    this.onSubmit(this.selectedDateYYYYMMDD);
                     handled = true;
                 } else if (evt.key === 'Escape') {
                     this.close();
@@ -488,23 +542,176 @@ class DateSelectorModal extends Modal {
             // Minimal styles for clarity and polish
             const style = document.createElement('style');
             style.textContent = `
-                .custom-calendar-container { margin: 2em 0 1em 0; padding: 0.5em 1em 1em 1em; min-width: 420px; min-height: 340px; display: flex; flex-direction: column; align-items: center; }
-                .calendar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.2em; width: 100%; }
-                .calendar-nav-btn { background: none; border: none; font-size: 1.6em; cursor: pointer; padding: 0 0.7em; color: #b3aaff; transition: color 0.15s; }
+                .date-selector-modal {
+                    width: auto !important;
+                    max-width: none !important;
+                    min-width: 0 !important;
+                    margin: 0 auto !important;
+                    box-sizing: border-box;
+                    padding: 2em !important;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                }
+                .custom-calendar-container {
+                    margin: 0 auto;
+                    padding: 0;
+                    min-height: 340px;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    width: auto;
+                    box-sizing: border-box;
+                }
+                .calendar-header { 
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: space-between; 
+                    margin-bottom: 1.2em; 
+                    width: 100%;
+                    box-sizing: border-box;
+                }
+                .calendar-nav-btn { 
+                    background: none; 
+                    border: none; 
+                    font-size: 1.6em; 
+                    cursor: pointer; 
+                    padding: 0 0.7em; 
+                    color: #b3aaff; 
+                    transition: color 0.15s; 
+                }
                 .calendar-nav-btn:hover { color: #a48cff; }
                 .calendar-month-year { font-weight: bold; font-size: 1.3em; letter-spacing: 0.02em; color: #fff; }
-                .calendar-selected-date-header { margin-bottom: 1em; font-size: 1.1em; color: #6d7cff; width: 100%; text-align: left; }
-                .calendar-days-row { display: flex; justify-content: space-between; margin-bottom: 0.3em; width: 100%; }
-                .calendar-day-label { width: 2.8em; height: 2.2em; text-align: center; font-size: 1.1em; color: #b3b3c6; font-weight: 600; letter-spacing: 0.01em; display: flex; align-items: center; justify-content: center; }
-                .calendar-dates-grid { display: flex; flex-direction: column; width: 100%; }
-                .calendar-week-row { display: flex; width: 100%; }
-                .calendar-date-blank { width: 2.8em; height: 2.8em; }
-                .calendar-date-btn { width: 2.8em; height: 2.8em; margin: 2px; border: none; border-radius: 8px; background: none; cursor: pointer; transition: background 0.15s, color 0.15s, box-shadow 0.15s; font-size: 1.1em; color: #e3e3f7; font-weight: 500; display: flex; align-items: center; justify-content: center; }
-                .calendar-date-btn:hover, .calendar-date-btn:focus { background: #e3f0ff22; color: #a48cff; outline: none; box-shadow: 0 0 0 2px #a48cff55; }
-                .calendar-date-selected { background: #a48cff; color: #fff; font-weight: 700; }
-                .calendar-date-today { border: 2px solid #a48cff; }
-                .calendar-date-focused { box-shadow: 0 0 0 2px #a48cff99; }
-                .calendar-date-outside { color: #bbb; background: #23232b; filter: brightness(0.85); }
+                .calendar-selected-date-header { 
+                    margin-bottom: 1em; 
+                    font-size: 1.1em; 
+                    color: #6d7cff; 
+                    width: 100%; 
+                    text-align: left; 
+                    box-sizing: border-box;
+                }
+                .calendar-days-row {
+                    display: grid;
+                    grid-template-columns: repeat(7, minmax(0, 1fr));
+                    gap: 0.4em;
+                    margin-bottom: 0.3em;
+                    width: 100%;
+                    box-sizing: border-box;
+                }
+                .calendar-day-label { 
+                    box-sizing: border-box;
+                    text-align: center; 
+                    font-size: 1.1em; 
+                    color: #b3b3c6; 
+                    font-weight: 600; 
+                    letter-spacing: 0.01em; 
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: center;
+                    height: 2.2em;
+                }
+                .calendar-day-label-weekend {
+                    color: #a48cff;
+                }
+                .calendar-dates-grid { 
+                    display: grid; 
+                    grid-template-rows: repeat(6, 1fr); 
+                    gap: 0.4em; 
+                    width: 100%; 
+                    box-sizing: border-box;
+                }
+                .calendar-week-row {
+                    display: grid;
+                    grid-template-columns: repeat(7, minmax(0, 1fr));
+                    gap: 0.4em;
+                    width: 100%;
+                    box-sizing: border-box;
+                }
+                .calendar-date-blank { 
+                    width: 2.6em; 
+                    height: 2.6em; 
+                    box-sizing: border-box; 
+                }
+                
+                /* Base date button - current month weekday (lightest) */
+                .calendar-date-btn { 
+                    width: 2.6em;
+                    height: 2.6em;
+                    margin: 0; 
+                    border: none; 
+                    border-radius: 6px; 
+                    background: rgba(78, 87, 119, 0.2);
+                    cursor: pointer; 
+                    transition: background 0.15s, color 0.15s, box-shadow 0.15s; 
+                    font-size: 1.1em; 
+                    color: #e3e3f7; 
+                    font-weight: 500; 
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: center; 
+                    box-sizing: border-box;
+                    overflow: hidden;
+                }
+                
+                /* Current month weekend (darker than weekday) */
+                .calendar-date-weekend {
+                    background: rgba(50, 45, 75, 0.65) !important;
+                    color: #c8c3f5 !important;
+                }
+                
+                /* Surrounding months weekday (darker than current month weekend) */
+                .calendar-date-outside { 
+                    color: #aaa !important; 
+                    background: rgba(45, 45, 55, 0.65) !important;
+                }
+                
+                /* Surrounding months weekend (darkest) */
+                .calendar-date-outside.calendar-date-weekend {
+                    background: rgba(30, 30, 45, 0.85) !important;
+                    color: #9992b8 !important;
+                }
+                
+                .calendar-date-btn:hover, .calendar-date-btn:focus { 
+                    background: rgba(164, 140, 255, 0.2) !important; 
+                    color: #fff !important; 
+                    outline: none; 
+                    box-shadow: 0 0 0 2px rgba(164, 140, 255, 0.4) !important; 
+                }
+                
+                .calendar-date-selected { 
+                    background: #a48cff !important; 
+                    color: #fff !important; 
+                    font-weight: 700; 
+                    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) !important;
+                }
+                
+                .calendar-date-today { 
+                    border: 2px solid #a48cff !important; 
+                }
+                
+                .calendar-date-focused { 
+                    box-shadow: 0 0 0 2px rgba(164, 140, 255, 0.6) !important;
+                }
+
+                /* Full-width button styling */
+                .date-selector-modal .setting-item {
+                    width: 100%;
+                    border-top: none;
+                    padding: 0;
+                }
+                
+                .date-selector-modal .setting-item-control {
+                    width: 100%;
+                    justify-content: center;
+                }
+                
+                .date-selector-modal .setting-item-control button {
+                    width: 100%;
+                    margin: 0;
+                    height: 2.5em;
+                    font-size: 1.05em;
+                    font-weight: 500;
+                }
             `;
             contentEl.appendChild(style);
         } else {
@@ -517,24 +724,28 @@ class DateSelectorModal extends Modal {
             });
         }
 
-        contentEl.createEl('div', { attr: { style: 'margin-top: 1rem;' } });
+        contentEl.createEl('div', { attr: { style: 'margin-top: 1rem; width: 100%;' } });
 
-        new Setting(contentEl)
-            .addButton((btn) =>
-                btn
-                    .setButtonText('Confirm Date')
-                    .setCta()
-                    .onClick(() => {
-                        // Basic validation: HTML5 date input usually ensures a valid format
-                        if (!this.selectedDateYYYYMMDD || !moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD', true).isValid()) {
-                            console.error("Invalid date selected in modal:", this.selectedDateYYYYMMDD);
-                            // Optionally show a notice to the user here
-                            return;
-                        }
-                        this.close();
-                        // Submit the selected date in YYYY-MM-DD format
-                        this.onSubmit(this.selectedDateYYYYMMDD);
-                    }));
+        // Replace the Setting with a direct button for more style control
+        const confirmBtn = contentEl.createEl('button', {
+            text: 'Confirm Date',
+            cls: 'mod-cta confirm-date-button',
+            attr: {
+                style: 'width: 100%; height: 2.8em; margin-top: 1em; font-size: 1.05em; font-weight: 500; border-radius: 6px;'
+            }
+        });
+        
+        confirmBtn.addEventListener('click', () => {
+            // Basic validation: check for valid date
+            if (!this.selectedDateYYYYMMDD || !moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD', true).isValid()) {
+                console.error("Invalid date selected in modal:", this.selectedDateYYYYMMDD);
+                // Optionally show a notice to the user here
+                return;
+            }
+            this.close();
+            // Submit the selected date in YYYY-MM-DD format
+            this.onSubmit(this.selectedDateYYYYMMDD);
+        });
 
         setTimeout(() => {
             const input = contentEl.querySelector('input.date-selector-input') as HTMLInputElement;
