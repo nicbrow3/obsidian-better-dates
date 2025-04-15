@@ -1,4 +1,7 @@
 {
+  "dateFormat": "MM/DD/YY",
+  "enableClickDates": true,
+  "enableAtSuggest": true,
   "outputFormat": "MM/DD/YY",
   "enableAtTrigger": true
 }
