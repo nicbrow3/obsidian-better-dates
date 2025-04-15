@@ -171,6 +171,15 @@ var DateSuggester = class extends import_obsidian.EditorSuggest {
       return null;
     }
     const query = sub.substring(triggerCharPos + 1);
+    if (query.length > 20) {
+      this.plugin.debugLog(`DateSuggester: onTrigger: Query exceeds 20 characters (${query.length}), canceling suggestion.`);
+      return null;
+    }
+    const spaceCount = (query.match(/ /g) || []).length;
+    if (spaceCount > 2) {
+      this.plugin.debugLog(`DateSuggester: onTrigger: Query contains more than 2 spaces (${spaceCount}), canceling suggestion.`);
+      return null;
+    }
     const completedDateRegex = /^\*(\d{1,2}\/\d{1,2}\/\d{2})\*/;
     if (completedDateRegex.test(query.trim())) {
       return null;
@@ -196,21 +205,118 @@ var DateSuggester = class extends import_obsidian.EditorSuggest {
       this.plugin.debugLog(`DateSuggester: onTrigger: Strict parse succeeded for "${query}"`);
       finalQuery = strictParsedDate.format("*MM/DD/YY*");
     } else {
-      const partialDateMatch = query.match(/^(\d{1,2})[\/-](\d{1,2})$/);
-      if (partialDateMatch) {
-        const currentYear = (0, import_obsidian.moment)().year();
-        const paddedMonth = partialDateMatch[1].padStart(2, "0");
-        const paddedDay = partialDateMatch[2].padStart(2, "0");
-        const fullDateStr = `${paddedMonth}/${paddedDay}/${currentYear}`;
-        const parsed = (0, import_obsidian.moment)(fullDateStr, "MM/DD/YYYY", true);
-        if (parsed.isValid()) {
-          finalQuery = parsed.format("*MM/DD/YY*");
-          this.plugin.debugLog(`DateSuggester: onTrigger: Partial date parse succeeded for "${query}" as "${finalQuery}"`);
+      const monthDayYearPattern = /^([a-zA-Z]+)\s+(\d{1,2})\s+(\d{2}|\d{4})$/i;
+      const monthDayYearMatch = query.match(monthDayYearPattern);
+      if (monthDayYearMatch) {
+        const monthText = monthDayYearMatch[1].toLowerCase();
+        const day = parseInt(monthDayYearMatch[2], 10);
+        let year = parseInt(monthDayYearMatch[3], 10);
+        if (monthDayYearMatch[3].length === 2) year += 2e3;
+        const monthMap = { "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3, "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7, "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12 };
+        let monthNum = -1;
+        let bestMatchKey = "";
+        for (const key in monthMap) {
+          if (monthText === key) {
+            bestMatchKey = key;
+            break;
+          } else if (monthText.startsWith(key) && key.length > bestMatchKey.length) {
+            bestMatchKey = key;
+          }
+        }
+        if (bestMatchKey) {
+          monthNum = monthMap[bestMatchKey];
+        }
+        if (monthNum > 0 && day >= 1 && day <= 31 && year > 1900) {
+          const dateObj = (0, import_obsidian.moment)({ year, month: monthNum - 1, day });
+          if (dateObj.isValid()) {
+            let formattedDate = dateObj.format(this.plugin.settings.dateFormat);
+            if (!/^\*.*\*$/.test(formattedDate)) formattedDate = `*${formattedDate}*`;
+            finalQuery = formattedDate;
+            this.plugin.debugLog(`MDY parse succeeded: "${query}" -> "${finalQuery}"`);
+          } else {
+            this.plugin.debugLog(`MDY constructed invalid date: "${query}"`);
+          }
         } else {
-          this.plugin.debugLog(`DateSuggester: onTrigger: Partial date parse failed for "${query}"`);
+          this.plugin.debugLog(`MDY parse failed (invalid parts): "${query}"`);
         }
       } else {
-        this.plugin.debugLog(`DateSuggester: onTrigger: Strict parsing failed for "${query}". Passing raw query.`);
+        const monthDaySingleDigitYearPattern = /^([a-zA-Z]+)\s+(\d{1,2})\s+(\d{1})$/i;
+        const monthDaySingleDigitYearMatch = query.match(monthDaySingleDigitYearPattern);
+        if (monthDaySingleDigitYearMatch) {
+          const monthText = monthDaySingleDigitYearMatch[1].toLowerCase();
+          const day = parseInt(monthDaySingleDigitYearMatch[2], 10);
+          const yearDigit = parseInt(monthDaySingleDigitYearMatch[3], 10);
+          const currentMoment = (0, import_obsidian.moment)();
+          const currentYear = currentMoment.year();
+          const lastDigitCurrentYear = currentYear % 10;
+          if (yearDigit === lastDigitCurrentYear) {
+            const targetYear = currentYear;
+            this.plugin.debugLog(`MDY(1) matched current year: ${yearDigit}=>${targetYear}`);
+            const monthMap = { "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3, "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7, "aug": 8, "august": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12 };
+            let monthNum = -1;
+            let bestMatchKey = "";
+            for (const key in monthMap) {
+              if (monthText === key) {
+                bestMatchKey = key;
+                break;
+              } else if (monthText.startsWith(key) && key.length > bestMatchKey.length) {
+                bestMatchKey = key;
+              }
+            }
+            if (bestMatchKey) {
+              monthNum = monthMap[bestMatchKey];
+            }
+            if (monthNum > 0 && day >= 1 && day <= 31) {
+              const dateObj = (0, import_obsidian.moment)({ year: targetYear, month: monthNum - 1, day });
+              if (dateObj.isValid()) {
+                let formattedDate = dateObj.format(this.plugin.settings.dateFormat);
+                if (!/^\*.*\*$/.test(formattedDate)) formattedDate = `*${formattedDate}*`;
+                finalQuery = formattedDate;
+                this.plugin.debugLog(`MDY(1) parse succeeded: "${query}" -> "${finalQuery}"`);
+              } else {
+                this.plugin.debugLog(`MDY(1) constructed invalid date: "${query}"`);
+              }
+            } else {
+              this.plugin.debugLog(`MDY(1) parse failed (invalid parts): "${query}"`);
+            }
+          } else {
+            this.plugin.debugLog(`MDY(1) digit ${yearDigit} != current year last digit ${lastDigitCurrentYear}. Passing raw.`);
+          }
+        } else {
+          const monthAbbrevPattern = /^([a-zA-Z]+)(?:\s+(\d{1,2}))?$/;
+          const monthAbbrevMatch = query.match(monthAbbrevPattern);
+          if (monthAbbrevMatch) {
+            const monthText = monthAbbrevMatch[1].toLowerCase();
+            const day = monthAbbrevMatch[2] ? parseInt(monthAbbrevMatch[2], 10) : 1;
+            const monthMap = { "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3, "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7, "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12 };
+            let monthNum = -1;
+            let bestMatchKey = "";
+            for (const key in monthMap) {
+              if (monthText === key) {
+                bestMatchKey = key;
+                break;
+              } else if (monthText.startsWith(key) && key.length > bestMatchKey.length) {
+                bestMatchKey = key;
+              }
+            }
+            if (bestMatchKey) {
+              monthNum = monthMap[bestMatchKey];
+            }
+            if (monthNum > 0 && day >= 1 && day <= 31) {
+              const dateObj = (0, import_obsidian.moment)();
+              dateObj.month(monthNum - 1);
+              dateObj.date(day);
+              let formattedDate = dateObj.format(this.plugin.settings.dateFormat);
+              if (!/^\*.*\*$/.test(formattedDate)) formattedDate = `*${formattedDate}*`;
+              finalQuery = formattedDate;
+              this.plugin.debugLog(`MD/M parse succeeded: "${query}" -> "${finalQuery}"`);
+            } else {
+              this.plugin.debugLog(`MD/M parse failed: "${query}"`);
+            }
+          } else {
+            this.plugin.debugLog(`No abbreviation pattern matched: "${query}". Passing raw.`);
+          }
+        }
       }
     }
     const triggerInfo = {
@@ -227,8 +333,168 @@ var DateSuggester = class extends import_obsidian.EditorSuggest {
     const suggestions = [];
     this.plugin.debugLog(`DateSuggester: getSuggestions: context.query = "${query}"`);
     if (query.startsWith("*") && query.endsWith("*")) {
-      suggestions.push({ label: `Insert date: ${query}`, isDate: true, dateValue: query });
+      const labelValue = query.slice(1, -1);
+      suggestions.push({ label: `Insert date: ${labelValue}`, isDate: true, dateValue: query });
       this.plugin.debugLog("DateSuggester: getSuggestions (Case 1): Suggesting pre-parsed date:", suggestions);
+    } else {
+      const supportedFormats = [
+        "MM/DD/YY",
+        "MM-DD-YY",
+        "YYYY-MM-DD",
+        "DD/MM/YYYY",
+        "MM/DD/YYYY",
+        "MMM D, YYYY",
+        "MMMM D, YYYY",
+        "MMM D, YY",
+        "MMMM D, YY",
+        "M/D/YY",
+        "M-D-YY",
+        "M/D/YYYY",
+        "M-D-YYYY",
+        "YYYY/M/D",
+        "YYYY-M-D",
+        "D/M/YYYY",
+        "D-M-YYYY"
+      ];
+      let parsedDate = null;
+      for (const fmt of supportedFormats) {
+        const m = (0, import_obsidian.moment)(query, fmt, true);
+        if (m.isValid()) {
+          parsedDate = m;
+          break;
+        }
+      }
+      if (!parsedDate) {
+        const numericParts = query.split(/[-\/]/).map((s) => s.trim()).filter(Boolean);
+        const now = (0, import_obsidian.moment)();
+        if (numericParts.length === 1 && /^\d{1,2}$/.test(numericParts[0])) {
+          const month = parseInt(numericParts[0], 10);
+          if (month >= 1 && month <= 12) {
+            parsedDate = (0, import_obsidian.moment)({ year: now.year(), month: month - 1, day: 1 });
+          }
+        } else if (numericParts.length === 2 && /^\d{1,2}$/.test(numericParts[0]) && /^\d{1,2}$/.test(numericParts[1])) {
+          const month = parseInt(numericParts[0], 10);
+          const day = parseInt(numericParts[1], 10);
+          if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+            parsedDate = (0, import_obsidian.moment)({ year: now.year(), month: month - 1, day });
+          }
+        } else if (numericParts.length === 3) {
+          const [a, b, c] = numericParts.map((x) => parseInt(x, 10));
+          if (a >= 1 && a <= 12 && b >= 1 && b <= 31 && c >= 0 && c <= 99) {
+            parsedDate = (0, import_obsidian.moment)({ year: 2e3 + c, month: a - 1, day: b });
+          } else if (a >= 1 && a <= 12 && b >= 1 && b <= 31 && c > 1900 && c < 3e3) {
+            parsedDate = (0, import_obsidian.moment)({ year: c, month: a - 1, day: b });
+          } else if (b >= 1 && b <= 12 && a >= 1 && a <= 31 && c >= 0 && c <= 99) {
+            parsedDate = (0, import_obsidian.moment)({ year: 2e3 + c, month: b - 1, day: a });
+          } else if (b >= 1 && b <= 12 && a >= 1 && a <= 31 && c > 1900 && c < 3e3) {
+            parsedDate = (0, import_obsidian.moment)({ year: c, month: b - 1, day: a });
+          }
+        }
+      }
+      if (parsedDate && parsedDate.isValid()) {
+        let formattedDateValue = parsedDate.format(this.plugin.settings.dateFormat);
+        let labelDate = formattedDateValue;
+        if (!/^\*.*\*$/.test(formattedDateValue)) {
+          formattedDateValue = `*${formattedDateValue}*`;
+        }
+        suggestions.push({
+          label: `Insert date: ${labelDate}`,
+          isDate: true,
+          dateValue: formattedDateValue
+        });
+      }
+      const monthAbbrevPattern = /^([a-zA-Z]+)(?:\s+(\d{1,2}))?$/;
+      const trimmedQuery = query.trim();
+      const monthAbbrevMatch = trimmedQuery.match(monthAbbrevPattern);
+      const monthMap = {
+        "jan": { name: "January", num: 1 },
+        "january": { name: "January", num: 1 },
+        "feb": { name: "February", num: 2 },
+        "february": { name: "February", num: 2 },
+        "mar": { name: "March", num: 3 },
+        "march": { name: "March", num: 3 },
+        "apr": { name: "April", num: 4 },
+        "april": { name: "April", num: 4 },
+        "may": { name: "May", num: 5 },
+        "jun": { name: "June", num: 6 },
+        "june": { name: "June", num: 6 },
+        "jul": { name: "July", num: 7 },
+        "july": { name: "July", num: 7 },
+        "aug": { name: "August", num: 8 },
+        "august": { name: "August", num: 8 },
+        "sep": { name: "September", num: 9 },
+        "sept": { name: "September", num: 9 },
+        "september": { name: "September", num: 9 },
+        "oct": { name: "October", num: 10 },
+        "october": { name: "October", num: 10 },
+        "nov": { name: "November", num: 11 },
+        "november": { name: "November", num: 11 },
+        "dec": { name: "December", num: 12 },
+        "december": { name: "December", num: 12 }
+      };
+      if (monthAbbrevMatch) {
+        const monthText = monthAbbrevMatch[1].toLowerCase();
+        const day = monthAbbrevMatch[2] ? parseInt(monthAbbrevMatch[2], 10) : 1;
+        let matchedMonths = [];
+        for (const key in monthMap) {
+          if (key.startsWith(monthText)) {
+            matchedMonths.push({ info: monthMap[key], key });
+          }
+        }
+        const uniqueMonths = {};
+        for (const match of matchedMonths) {
+          uniqueMonths[match.info.num] = match.info;
+        }
+        for (const num in uniqueMonths) {
+          const info = uniqueMonths[num];
+          const dateObj = (0, import_obsidian.moment)();
+          dateObj.month(info.num - 1);
+          dateObj.date(day);
+          let formattedDateValue = dateObj.format(this.plugin.settings.dateFormat);
+          let labelDate = formattedDateValue;
+          if (!/^\*.*\*$/.test(formattedDateValue)) {
+            formattedDateValue = `*${formattedDateValue}*`;
+          }
+          suggestions.push({
+            label: `Insert date: ${labelDate}`,
+            isDate: true,
+            dateValue: formattedDateValue
+          });
+        }
+      }
+      const monthDaySingleDigitYearPattern = /^([a-zA-Z]+)\s+(\d{1,2})\s+(\d{1})$/i;
+      const singleDigitMatch = trimmedQuery.match(monthDaySingleDigitYearPattern);
+      if (singleDigitMatch) {
+        const monthText = singleDigitMatch[1].toLowerCase();
+        const day = parseInt(singleDigitMatch[2], 10);
+        const currentYear = (0, import_obsidian.moment)().year();
+        let monthNum = null;
+        for (const key in monthMap) {
+          if (key.startsWith(monthText)) {
+            monthNum = monthMap[key].num;
+            break;
+          }
+        }
+        if (monthNum && day >= 1 && day <= 31) {
+          const dateObj = (0, import_obsidian.moment)({ year: currentYear, month: monthNum - 1, day });
+          if (dateObj.isValid()) {
+            let formattedDateValue = dateObj.format(this.plugin.settings.dateFormat);
+            let labelDate = formattedDateValue;
+            if (!/^\*.*\*$/.test(formattedDateValue)) {
+              formattedDateValue = `*${formattedDateValue}*`;
+            }
+            suggestions.push({
+              label: `Insert date: ${labelDate}`,
+              isDate: true,
+              dateValue: formattedDateValue
+            });
+          }
+        }
+      } else if (context.query !== query && context.query.startsWith("*") && context.query.endsWith("*")) {
+        const labelValue = context.query.slice(1, -1);
+        suggestions.push({ label: `Insert date: ${labelValue}`, isDate: true, dateValue: context.query });
+        this.plugin.debugLog("DateSuggester: getSuggestions (Case 1.5 - onTrigger parsed): Suggesting pre-parsed date:", suggestions);
+      }
     }
     if (!query.trim()) {
       const todayRaw = (0, import_obsidian.moment)().format(this.plugin.settings.dateFormat);

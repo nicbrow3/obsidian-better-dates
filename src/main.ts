@@ -224,6 +224,19 @@ class DateSuggester extends EditorSuggest<DateSuggestion> {
 
         const query = sub.substring(triggerCharPos + 1);
 
+        // Cancel suggestion if query exceeds 20 characters as it's likely not a date
+        if (query.length > 20) {
+            this.plugin.debugLog(`DateSuggester: onTrigger: Query exceeds 20 characters (${query.length}), canceling suggestion.`);
+            return null;
+        }
+
+        // Cancel suggestion if query contains more than 2 spaces (no date format has more than 2 spaces)
+        const spaceCount = (query.match(/ /g) || []).length;
+        if (spaceCount > 2) {
+            this.plugin.debugLog(`DateSuggester: onTrigger: Query contains more than 2 spaces (${spaceCount}), canceling suggestion.`);
+            return null;
+        }
+
         // Check if a completed date (*MM/DD/YY*) appears after the last @ and before the cursor
         const completedDateRegex = /^\*(\d{1,2}\/\d{1,2}\/\d{2})\*/;
         if (completedDateRegex.test(query.trim())) {
@@ -248,25 +261,127 @@ class DateSuggester extends EditorSuggest<DateSuggestion> {
             this.plugin.debugLog(`DateSuggester: onTrigger: Strict parse succeeded for "${query}"`);
             finalQuery = strictParsedDate.format('*MM/DD/YY*');
         } else {
-            // Try to match partial date (month-day or month/day)
-            const partialDateMatch = query.match(/^(\d{1,2})[\/-](\d{1,2})$/);
-            if (partialDateMatch) {
-                const currentYear = moment().year();
-                // Try parsing with current year
-                const paddedMonth = partialDateMatch[1].padStart(2, '0');
-                const paddedDay = partialDateMatch[2].padStart(2, '0');
-                const fullDateStr = `${paddedMonth}/${paddedDay}/${currentYear}`;
-                const parsed = moment(fullDateStr, 'MM/DD/YYYY', true);
-                if (parsed.isValid()) {
-                    finalQuery = parsed.format('*MM/DD/YY*');
-                    this.plugin.debugLog(`DateSuggester: onTrigger: Partial date parse succeeded for "${query}" as "${finalQuery}"`);
-                } else {
-                    this.plugin.debugLog(`DateSuggester: onTrigger: Partial date parse failed for "${query}"`);
+            // Try to match month day year abbreviation pattern (e.g., "sep 02 23" or "sep 2 2023")
+            const monthDayYearPattern = /^([a-zA-Z]+)\s+(\d{1,2})\s+(\d{2}|\d{4})$/i;
+            const monthDayYearMatch = query.match(monthDayYearPattern);
+
+            if (monthDayYearMatch) {
+                // Handle Month Day YY / YYYY
+                const monthText = monthDayYearMatch[1].toLowerCase();
+                const day = parseInt(monthDayYearMatch[2], 10);
+                let year = parseInt(monthDayYearMatch[3], 10);
+                if (monthDayYearMatch[3].length === 2) year += 2000;
+
+                const monthMap: {[key: string]: number} = { 'jan': 1, 'january': 1, 'feb': 2, 'february': 2, 'mar': 3, 'march': 3, 'apr': 4, 'april': 4, 'may': 5, 'jun': 6, 'june': 6, 'jul': 7, 'july': 7, 'aug': 8, 'august': 8, 'sep': 9, 'sept': 9, 'september': 9, 'oct': 10, 'october': 10, 'nov': 11, 'november': 11, 'dec': 12, 'december': 12 };
+                let monthNum = -1;
+                // Find the best match (prefer exact match over prefix)
+                let bestMatchKey = "";
+                for (const key in monthMap) {
+                    if (monthText === key) { // Exact match
+                        bestMatchKey = key;
+                        break;
+                    } else if (monthText.startsWith(key) && key.length > bestMatchKey.length) { // Prefix match
+                        bestMatchKey = key;
+                    }
                 }
-            } else {
-                this.plugin.debugLog(`DateSuggester: onTrigger: Strict parsing failed for "${query}". Passing raw query.`);
-            }
-        }
+                if (bestMatchKey) {
+                    monthNum = monthMap[bestMatchKey];
+                }
+
+                if (monthNum > 0 && day >= 1 && day <= 31 && year > 1900) {
+                    const dateObj = moment({ year: year, month: monthNum - 1, day: day });
+                    if (dateObj.isValid()) {
+                        let formattedDate = dateObj.format(this.plugin.settings.dateFormat);
+                        if (!/^\*.*\*$/.test(formattedDate)) formattedDate = `*${formattedDate}*`;
+                        finalQuery = formattedDate;
+                        this.plugin.debugLog(`MDY parse succeeded: "${query}" -> "${finalQuery}"`);
+                    } else { this.plugin.debugLog(`MDY constructed invalid date: "${query}"`); }
+                } else { this.plugin.debugLog(`MDY parse failed (invalid parts): "${query}"`); }
+            
+            } else { // Not Month Day YY / YYYY, try Month Day Y
+                 const monthDaySingleDigitYearPattern = /^([a-zA-Z]+)\s+(\d{1,2})\s+(\d{1})$/i;
+                 const monthDaySingleDigitYearMatch = query.match(monthDaySingleDigitYearPattern);
+
+                 if (monthDaySingleDigitYearMatch) {
+                     // Handle Month Day Y (only if digit matches current year's last digit)
+                     const monthText = monthDaySingleDigitYearMatch[1].toLowerCase();
+                     const day = parseInt(monthDaySingleDigitYearMatch[2], 10);
+                     const yearDigit = parseInt(monthDaySingleDigitYearMatch[3], 10);
+                     const currentMoment = moment();
+                     const currentYear = currentMoment.year();
+                     const lastDigitCurrentYear = currentYear % 10;
+
+                     if (yearDigit === lastDigitCurrentYear) {
+                         const targetYear = currentYear;
+                         this.plugin.debugLog(`MDY(1) matched current year: ${yearDigit}=>${targetYear}`);
+                         const monthMap: {[key: string]: number} = { 'jan': 1, 'january': 1, 'feb': 2, 'february': 2, 'mar': 3, 'march': 3, 'apr': 4, 'april': 4, 'may': 5, 'jun': 6, 'june': 6, 'jul': 7, 'july': 7, 'aug': 8, 'august': 8, 'sep': 9, 'sept': 9, 'oct': 10, 'nov': 11, 'dec': 12 };
+                         let monthNum = -1;
+                         // Find the best match (prefer exact match over prefix)
+                         let bestMatchKey = "";
+                         for (const key in monthMap) {
+                             if (monthText === key) { // Exact match
+                                 bestMatchKey = key;
+                                 break;
+                             } else if (monthText.startsWith(key) && key.length > bestMatchKey.length) { // Prefix match
+                                 bestMatchKey = key;
+                             }
+                         }
+                         if (bestMatchKey) {
+                             monthNum = monthMap[bestMatchKey];
+                         }
+
+                         if (monthNum > 0 && day >= 1 && day <= 31) {
+                             const dateObj = moment({ year: targetYear, month: monthNum - 1, day: day });
+                             if (dateObj.isValid()) {
+                                 let formattedDate = dateObj.format(this.plugin.settings.dateFormat);
+                                 if (!/^\*.*\*$/.test(formattedDate)) formattedDate = `*${formattedDate}*`;
+                                 finalQuery = formattedDate;
+                                 this.plugin.debugLog(`MDY(1) parse succeeded: "${query}" -> "${finalQuery}"`);
+                             } else { this.plugin.debugLog(`MDY(1) constructed invalid date: "${query}"`); }
+                         } else { this.plugin.debugLog(`MDY(1) parse failed (invalid parts): "${query}"`); }
+                     } else {
+                         this.plugin.debugLog(`MDY(1) digit ${yearDigit} != current year last digit ${lastDigitCurrentYear}. Passing raw.`);
+                     }
+                 
+                 } else { // Not Month Day YY/YYYY and not Month Day Y, THEN try Month Day / Month only
+                     const monthAbbrevPattern = /^([a-zA-Z]+)(?:\s+(\d{1,2}))?$/;
+                     const monthAbbrevMatch = query.match(monthAbbrevPattern);
+                     
+                     if (monthAbbrevMatch) {
+                        // Handle Month Day / Month only (using current year)
+                        const monthText = monthAbbrevMatch[1].toLowerCase();
+                        const day = monthAbbrevMatch[2] ? parseInt(monthAbbrevMatch[2], 10) : 1;
+                        // *** Ensure this map includes full names ***
+                        const monthMap: {[key: string]: number} = { 'jan': 1, 'january': 1, 'feb': 2, 'february': 2, 'mar': 3, 'march': 3, 'apr': 4, 'april': 4, 'may': 5, 'jun': 6, 'june': 6, 'jul': 7, 'july': 7, 'aug': 8, 'august': 8, 'sep': 9, 'sept': 9, 'september': 9, 'oct': 10, 'october': 10, 'nov': 11, 'november': 11, 'dec': 12, 'december': 12 };
+                        let monthNum = -1;
+                        // Find the best match (prefer exact match over prefix)
+                        let bestMatchKey = "";
+                        for (const key in monthMap) {
+                            if (monthText === key) { // Exact match
+                                bestMatchKey = key;
+                                break;
+                            } else if (monthText.startsWith(key) && key.length > bestMatchKey.length) { // Prefix match
+                                bestMatchKey = key;
+                            }
+                        }
+                        if (bestMatchKey) {
+                            monthNum = monthMap[bestMatchKey];
+                        }
+                        // *** Corrected logic using monthNum ***
+                        if (monthNum > 0 && day >= 1 && day <= 31) {
+                            const dateObj = moment(); 
+                            dateObj.month(monthNum - 1); dateObj.date(day);
+                            let formattedDate = dateObj.format(this.plugin.settings.dateFormat);
+                            if (!/^\*.*\*$/.test(formattedDate)) formattedDate = `*${formattedDate}*`;
+                            finalQuery = formattedDate;
+                            this.plugin.debugLog(`MD/M parse succeeded: "${query}" -> "${finalQuery}"`);
+                        } else { this.plugin.debugLog(`MD/M parse failed: "${query}"`); }
+                     } else {
+                         this.plugin.debugLog(`No abbreviation pattern matched: "${query}". Passing raw.`);
+                     }
+                 } // End else for monthAbbrevPattern check
+             } // End else for monthDaySingleDigitYearPattern check
+        } // End else for monthDayYearPattern check
 
         const triggerInfo = {
             start: { line: cursor.line, ch: triggerCharPos },
@@ -285,21 +400,178 @@ class DateSuggester extends EditorSuggest<DateSuggestion> {
         const suggestions: DateSuggestion[] = [];
         this.plugin.debugLog(`DateSuggester: getSuggestions: context.query = "${query}"`);
 
-        // Case 1: Query is formatted (successfully parsed by onTrigger)
+        // Case 1: Query is formatted (successfully parsed by onTrigger, includes asterisks)
         if (query.startsWith('*') && query.endsWith('*')) {
-            suggestions.push({ label: `Insert date: ${query}`, isDate: true, dateValue: query });
+            const labelValue = query.slice(1, -1); // Remove asterisks for the label
+            suggestions.push({ label: `Insert date: ${labelValue}`, isDate: true, dateValue: query });
             this.plugin.debugLog("DateSuggester: getSuggestions (Case 1): Suggesting pre-parsed date:", suggestions);
+        } else {
+            // --- Robust numeric date parsing for all supported formats ---
+            const supportedFormats = [
+                'MM/DD/YY', 'MM-DD-YY', 'YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY',
+                'MMM D, YYYY', 'MMMM D, YYYY', 'MMM D, YY', 'MMMM D, YY',
+                'M/D/YY', 'M-D-YY', 'M/D/YYYY', 'M-D-YYYY',
+                'YYYY/M/D', 'YYYY-M-D', 'D/M/YYYY', 'D-M-YYYY',
+            ];
+            let parsedDate = null;
+            for (const fmt of supportedFormats) {
+                const m = moment(query, fmt, true);
+                if (m.isValid()) {
+                    parsedDate = m;
+                    break;
+                }
+            }
+            // Fallback: handle short numeric dates like '3-3-3', '3-3', '3'
+            if (!parsedDate) {
+                const numericParts = query.split(/[-\/]/).map(s => s.trim()).filter(Boolean);
+                const now = moment();
+                if (numericParts.length === 1 && /^\d{1,2}$/.test(numericParts[0])) {
+                    // '@3' => March 1, current year
+                    const month = parseInt(numericParts[0], 10);
+                    if (month >= 1 && month <= 12) {
+                        parsedDate = moment({ year: now.year(), month: month - 1, day: 1 });
+                    }
+                } else if (numericParts.length === 2 && /^\d{1,2}$/.test(numericParts[0]) && /^\d{1,2}$/.test(numericParts[1])) {
+                    // '@3-3' => March 3, current year
+                    const month = parseInt(numericParts[0], 10);
+                    const day = parseInt(numericParts[1], 10);
+                    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+                        parsedDate = moment({ year: now.year(), month: month - 1, day });
+                    }
+                } else if (numericParts.length === 3) {
+                    // Try MM-DD-YY, MM-DD-YYYY, DD-MM-YY, etc.
+                    const [a, b, c] = numericParts.map(x => parseInt(x, 10));
+                    // MM-DD-YY (2-digit year)
+                    if (a >= 1 && a <= 12 && b >= 1 && b <= 31 && c >= 0 && c <= 99) {
+                        parsedDate = moment({ year: 2000 + c, month: a - 1, day: b });
+                    }
+                    // MM-DD-YYYY
+                    else if (a >= 1 && a <= 12 && b >= 1 && b <= 31 && c > 1900 && c < 3000) {
+                        parsedDate = moment({ year: c, month: a - 1, day: b });
+                    }
+                    // DD-MM-YY
+                    else if (b >= 1 && b <= 12 && a >= 1 && a <= 31 && c >= 0 && c <= 99) {
+                        parsedDate = moment({ year: 2000 + c, month: b - 1, day: a });
+                    }
+                    // DD-MM-YYYY
+                    else if (b >= 1 && b <= 12 && a >= 1 && a <= 31 && c > 1900 && c < 3000) {
+                        parsedDate = moment({ year: c, month: b - 1, day: a });
+                    }
+                }
+            }
+            if (parsedDate && parsedDate.isValid()) {
+                let formattedDateValue = parsedDate.format(this.plugin.settings.dateFormat);
+                let labelDate = formattedDateValue;
+                if (!/^\*.*\*$/.test(formattedDateValue)) {
+                    formattedDateValue = `*${formattedDateValue}*`;
+                }
+                suggestions.push({
+                    label: `Insert date: ${labelDate}`,
+                    isDate: true,
+                    dateValue: formattedDateValue
+                });
+            }
+            // Check if this might be a month abbreviation (Month Day or Month only)
+            const monthAbbrevPattern = /^([a-zA-Z]+)(?:\s+(\d{1,2}))?$/;
+            const trimmedQuery = query.trim(); 
+            const monthAbbrevMatch = trimmedQuery.match(monthAbbrevPattern);
+
+            const monthMap: {[key: string]: {name: string, num: number}} = {
+                'jan': {name: 'January', num: 1}, 'january': {name: 'January', num: 1},
+                'feb': {name: 'February', num: 2}, 'february': {name: 'February', num: 2},
+                'mar': {name: 'March', num: 3}, 'march': {name: 'March', num: 3},
+                'apr': {name: 'April', num: 4}, 'april': {name: 'April', num: 4},
+                'may': {name: 'May', num: 5},
+                'jun': {name: 'June', num: 6}, 'june': {name: 'June', num: 6},
+                'jul': {name: 'July', num: 7}, 'july': {name: 'July', num: 7},
+                'aug': {name: 'August', num: 8}, 'august': {name: 'August', num: 8},
+                'sep': {name: 'September', num: 9}, 'sept': {name: 'September', num: 9}, 'september': {name: 'September', num: 9},
+                'oct': {name: 'October', num: 10}, 'october': {name: 'October', num: 10},
+                'nov': {name: 'November', num: 11}, 'november': {name: 'November', num: 11},
+                'dec': {name: 'December', num: 12}, 'december': {name: 'December', num: 12}
+            };
+
+            // Always suggest all matching months for partial input
+            if (monthAbbrevMatch) {
+                const monthText = monthAbbrevMatch[1].toLowerCase();
+                const day = monthAbbrevMatch[2] ? parseInt(monthAbbrevMatch[2], 10) : 1;
+                // Find all matching months (prefix match)
+                let matchedMonths: {info: {name: string, num: number}, key: string}[] = [];
+                for (const key in monthMap) {
+                    if (key.startsWith(monthText)) {
+                        matchedMonths.push({info: monthMap[key], key: key});
+                    }
+                }
+                // Remove duplicates by month number (so 'dec' and 'december' don't both show)
+                const uniqueMonths: {[num: number]: {name: string, num: number}} = {};
+                for (const match of matchedMonths) {
+                    uniqueMonths[match.info.num] = match.info;
+                }
+                for (const num in uniqueMonths) {
+                    const info = uniqueMonths[num];
+                    const dateObj = moment();
+                    dateObj.month(info.num - 1);
+                    dateObj.date(day);
+                    let formattedDateValue = dateObj.format(this.plugin.settings.dateFormat);
+                    let labelDate = formattedDateValue;
+                    if (!/^\*.*\*$/.test(formattedDateValue)) {
+                        formattedDateValue = `*${formattedDateValue}*`;
+                    }
+                    suggestions.push({
+                        label: `Insert date: ${labelDate}`,
+                        isDate: true,
+                        dateValue: formattedDateValue
+                    });
+                }
+            }
+            // Handle raw query that looks like Month Day Y (e.g., 'december 2 2')
+            const monthDaySingleDigitYearPattern = /^([a-zA-Z]+)\s+(\d{1,2})\s+(\d{1})$/i;
+            const singleDigitMatch = trimmedQuery.match(monthDaySingleDigitYearPattern);
+            if (singleDigitMatch) {
+                const monthText = singleDigitMatch[1].toLowerCase();
+                const day = parseInt(singleDigitMatch[2], 10);
+                // Always use current year for single digit year
+                const currentYear = moment().year();
+                let monthNum = null;
+                for (const key in monthMap) {
+                    if (key.startsWith(monthText)) {
+                        monthNum = monthMap[key].num;
+                        break;
+                    }
+                }
+                if (monthNum && day >= 1 && day <= 31) {
+                    const dateObj = moment({ year: currentYear, month: monthNum - 1, day: day });
+                    if (dateObj.isValid()) {
+                        let formattedDateValue = dateObj.format(this.plugin.settings.dateFormat);
+                        let labelDate = formattedDateValue;
+                        if (!/^\*.*\*$/.test(formattedDateValue)) {
+                            formattedDateValue = `*${formattedDateValue}*`;
+                        }
+                        suggestions.push({
+                            label: `Insert date: ${labelDate}`,
+                            isDate: true,
+                            dateValue: formattedDateValue
+                        });
+                    }
+                }
+            }
+            // If it wasn't any abbreviation pattern we handle here, 
+            // BUT onTrigger *did* format it (meaning it was a strictly parsed date like MM/DD/YY), show that.
+            else if (context.query !== query && context.query.startsWith('*') && context.query.endsWith('*')) {
+                const labelValue = context.query.slice(1, -1); // Remove asterisks for label
+                suggestions.push({ label: `Insert date: ${labelValue}`, isDate: true, dateValue: context.query });
+                this.plugin.debugLog("DateSuggester: getSuggestions (Case 1.5 - onTrigger parsed): Suggesting pre-parsed date:", suggestions);
+            }
         }
-        // Case 2: Query is raw text (parsing failed in onTrigger)
-        // No further parsing attempt here.
 
         // Always add the option to insert today's date if the query is empty (i.e., just '@')
         if (!query.trim()) {
-            const todayRaw = moment().format(this.plugin.settings.dateFormat); // No asterisks for label
+            const todayRaw = moment().format(this.plugin.settings.dateFormat); // Raw format for label
             let todayInsert = todayRaw;
             if (!/^\*.*\*$/.test(todayInsert)) {
-                todayInsert = `*${todayInsert}*`;
+                todayInsert = `*${todayInsert}*`; // Add asterisks for insertion value
             }
+            // Use todayRaw (no asterisks) for the label
             suggestions.push({ label: `Today: ${todayRaw}`, isDate: true, dateValue: todayInsert });
         }
 
