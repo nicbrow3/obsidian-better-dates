@@ -2,6 +2,8 @@
   "dateFormat": "MM/DD/YY",
   "enableClickDates": true,
   "enableAtSuggest": true,
+  "debugLogging": false,
+  "useCustomCalendar": true,
   "outputFormat": "MM/DD/YY",
   "enableAtTrigger": true
 }

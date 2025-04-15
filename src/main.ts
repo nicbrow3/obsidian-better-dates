@@ -28,6 +28,7 @@ interface DateSelectorSettings {
     enableClickDates: boolean;
     enableAtSuggest: boolean;
     debugLogging: boolean;
+    useCustomCalendar: boolean; // New setting
 }
 
 const DEFAULT_SETTINGS: DateSelectorSettings = {
@@ -35,6 +36,7 @@ const DEFAULT_SETTINGS: DateSelectorSettings = {
     enableClickDates: true,
     enableAtSuggest: true,
     debugLogging: false,
+    useCustomCalendar: false, // Default to false
 };
 
 // The main plugin class
@@ -355,13 +357,165 @@ class DateSelectorModal extends Modal {
         contentEl.addClass('date-selector-modal');
         contentEl.createEl('h2', { text: 'Select a Date' });
 
-        const dateInput = contentEl.createEl('input', { type: 'date', cls: 'date-selector-input' });
-        dateInput.value = this.selectedDateYYYYMMDD; // Use YYYY-MM-DD for input
+        const plugin = (this.app as any).plugins.plugins['obsidian-date-selector'] as DateSelectorPlugin | undefined;
+        const useCustomCalendar = plugin?.settings?.useCustomCalendar;
 
-        dateInput.addEventListener('change', (evt) => {
-             // Keep storing as YYYY-MM-DD
-            this.selectedDateYYYYMMDD = (evt.target as HTMLInputElement).value;
-        });
+        if (useCustomCalendar) {
+            // --- Custom Calendar UI ---
+            const calendarContainer = contentEl.createEl('div', { cls: 'custom-calendar-container' });
+            let currentMonth = moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD', true).isValid()
+                ? moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD')
+                : moment();
+            let focusedDate = moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD', true).isValid()
+                ? moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD')
+                : moment();
+
+            // Show selected date in header
+            const selectedDateHeader = contentEl.createEl('div', { cls: 'calendar-selected-date-header' });
+            const updateSelectedDateHeader = () => {
+                selectedDateHeader.setText('Selected: ' + moment(this.selectedDateYYYYMMDD, 'YYYY-MM-DD').format('MMM D, YYYY'));
+            };
+            updateSelectedDateHeader();
+
+            const renderCalendar = () => {
+                calendarContainer.empty();
+                // Header with month and year, and navigation
+                const header = calendarContainer.createEl('div', { cls: 'calendar-header' });
+                const prevBtn = header.createEl('button', { text: '<', cls: 'calendar-nav-btn' });
+                const monthYear = header.createEl('span', { text: currentMonth.format('MMMM YYYY'), cls: 'calendar-month-year' });
+                const nextBtn = header.createEl('button', { text: '>', cls: 'calendar-nav-btn' });
+
+                prevBtn.onclick = () => {
+                    currentMonth = currentMonth.clone().subtract(1, 'month');
+                    renderCalendar();
+                };
+                nextBtn.onclick = () => {
+                    currentMonth = currentMonth.clone().add(1, 'month');
+                    renderCalendar();
+                };
+
+                // Days of week
+                const daysRow = calendarContainer.createEl('div', { cls: 'calendar-days-row' });
+                const daysShort = moment.weekdaysShort();
+                daysShort.forEach(day => {
+                    daysRow.createEl('span', { text: day, cls: 'calendar-day-label' });
+                });
+
+                // Dates grid as table-like rows (7 columns per week)
+                const datesGrid = calendarContainer.createEl('div', { cls: 'calendar-dates-grid' });
+                const startOfMonth = currentMonth.clone().startOf('month');
+                const endOfMonth = currentMonth.clone().endOf('month');
+                const startDay = startOfMonth.day();
+                const daysInMonth = currentMonth.daysInMonth();
+
+                // Calculate the first day to display (may be in previous month)
+                let gridStart = startOfMonth.clone().subtract(startDay, 'days');
+                // Calculate the total number of days to display (6 weeks max, 42 days)
+                let totalDays = 42;
+
+                for (let week = 0; week < 6; week++) {
+                    const weekRow = datesGrid.createEl('div', { cls: 'calendar-week-row' });
+                    for (let day = 0; day < 7; day++) {
+                        const date = gridStart.clone().add(week * 7 + day, 'days');
+                        const dateStr = date.format('YYYY-MM-DD');
+                        const isCurrentMonth = date.month() === currentMonth.month();
+                        const dateBtn = weekRow.createEl('button', { text: String(date.date()), cls: 'calendar-date-btn' });
+                        if (!isCurrentMonth) {
+                            dateBtn.addClass('calendar-date-outside');
+                        }
+                        if (dateStr === this.selectedDateYYYYMMDD) {
+                            dateBtn.addClass('calendar-date-selected');
+                        }
+                        if (date.isSame(moment(), 'day')) {
+                            dateBtn.addClass('calendar-date-today');
+                        }
+                        if (dateStr === focusedDate.format('YYYY-MM-DD')) {
+                            dateBtn.addClass('calendar-date-focused');
+                        }
+                        dateBtn.onclick = () => {
+                            // Only re-render if the month changes
+                            if (!date.isSame(currentMonth, 'month')) {
+                                currentMonth = date.clone();
+                                renderCalendar();
+                            }
+                            // Always update selected date and header
+                            this.selectedDateYYYYMMDD = dateStr;
+                            focusedDate = date.clone();
+                            updateSelectedDateHeader();
+                            // Visually highlight selection (handled by re-render if month changed)
+                        };
+                    }
+                }
+            };
+            renderCalendar();
+
+            // Keyboard navigation
+            const handleKeyDown = (evt: KeyboardEvent) => {
+                let handled = false;
+                if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(evt.key)) {
+                    let newFocus = focusedDate.clone();
+                    if (evt.key === 'ArrowLeft') newFocus.subtract(1, 'day');
+                    if (evt.key === 'ArrowRight') newFocus.add(1, 'day');
+                    if (evt.key === 'ArrowUp') newFocus.subtract(7, 'day');
+                    if (evt.key === 'ArrowDown') newFocus.add(7, 'day');
+                    if (!newFocus.isSame(currentMonth, 'month')) {
+                        currentMonth = newFocus.clone();
+                    }
+                    focusedDate = newFocus;
+                    renderCalendar();
+                    handled = true;
+                } else if (evt.key === 'Enter') {
+                    this.selectedDateYYYYMMDD = focusedDate.format('YYYY-MM-DD');
+                    updateSelectedDateHeader();
+                    renderCalendar();
+                    handled = true;
+                } else if (evt.key === 'Escape') {
+                    this.close();
+                    handled = true;
+                }
+                if (handled) {
+                    evt.preventDefault();
+                    evt.stopPropagation();
+                }
+            };
+            this.scope.register([], 'ArrowLeft', handleKeyDown);
+            this.scope.register([], 'ArrowRight', handleKeyDown);
+            this.scope.register([], 'ArrowUp', handleKeyDown);
+            this.scope.register([], 'ArrowDown', handleKeyDown);
+            this.scope.register([], 'Enter', handleKeyDown);
+            this.scope.register([], 'Escape', handleKeyDown);
+
+            // Minimal styles for clarity and polish
+            const style = document.createElement('style');
+            style.textContent = `
+                .custom-calendar-container { margin: 2em 0 1em 0; padding: 0.5em 1em 1em 1em; min-width: 420px; min-height: 340px; display: flex; flex-direction: column; align-items: center; }
+                .calendar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.2em; width: 100%; }
+                .calendar-nav-btn { background: none; border: none; font-size: 1.6em; cursor: pointer; padding: 0 0.7em; color: #b3aaff; transition: color 0.15s; }
+                .calendar-nav-btn:hover { color: #a48cff; }
+                .calendar-month-year { font-weight: bold; font-size: 1.3em; letter-spacing: 0.02em; color: #fff; }
+                .calendar-selected-date-header { margin-bottom: 1em; font-size: 1.1em; color: #6d7cff; width: 100%; text-align: left; }
+                .calendar-days-row { display: flex; justify-content: space-between; margin-bottom: 0.3em; width: 100%; }
+                .calendar-day-label { width: 2.8em; height: 2.2em; text-align: center; font-size: 1.1em; color: #b3b3c6; font-weight: 600; letter-spacing: 0.01em; display: flex; align-items: center; justify-content: center; }
+                .calendar-dates-grid { display: flex; flex-direction: column; width: 100%; }
+                .calendar-week-row { display: flex; width: 100%; }
+                .calendar-date-blank { width: 2.8em; height: 2.8em; }
+                .calendar-date-btn { width: 2.8em; height: 2.8em; margin: 2px; border: none; border-radius: 8px; background: none; cursor: pointer; transition: background 0.15s, color 0.15s, box-shadow 0.15s; font-size: 1.1em; color: #e3e3f7; font-weight: 500; display: flex; align-items: center; justify-content: center; }
+                .calendar-date-btn:hover, .calendar-date-btn:focus { background: #e3f0ff22; color: #a48cff; outline: none; box-shadow: 0 0 0 2px #a48cff55; }
+                .calendar-date-selected { background: #a48cff; color: #fff; font-weight: 700; }
+                .calendar-date-today { border: 2px solid #a48cff; }
+                .calendar-date-focused { box-shadow: 0 0 0 2px #a48cff99; }
+                .calendar-date-outside { color: #bbb; background: #23232b; filter: brightness(0.85); }
+            `;
+            contentEl.appendChild(style);
+        } else {
+            const dateInput = contentEl.createEl('input', { type: 'date', cls: 'date-selector-input' });
+            dateInput.value = this.selectedDateYYYYMMDD; // Use YYYY-MM-DD for input
+
+            dateInput.addEventListener('change', (evt) => {
+                // Keep storing as YYYY-MM-DD
+                this.selectedDateYYYYMMDD = (evt.target as HTMLInputElement).value;
+            });
+        }
 
         contentEl.createEl('div', { attr: { style: 'margin-top: 1rem;' } });
 
@@ -382,7 +536,10 @@ class DateSelectorModal extends Modal {
                         this.onSubmit(this.selectedDateYYYYMMDD);
                     }));
 
-        setTimeout(() => dateInput.focus(), 50);
+        setTimeout(() => {
+            const input = contentEl.querySelector('input.date-selector-input') as HTMLInputElement;
+            if (input) input.focus();
+        }, 50);
     }
 
     onClose() {
@@ -451,6 +608,16 @@ class DateSelectorSettingTab extends PluginSettingTab {
             text: 'Requires plugin reload to take effect.',
             attr: { style: 'color: #d43a3a; margin-bottom: 1.5em; font-size: 0.95em;' }
         });
+        new Setting(containerEl)
+            .setName('Use custom calendar UI')
+            .setDesc('Use a custom calendar UI for date picking (Notion-style).')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.useCustomCalendar)
+                .onChange(async (value) => {
+                    this.plugin.settings.useCustomCalendar = value;
+                    await this.plugin.saveData(this.plugin.settings);
+                })
+            );
         new Setting(containerEl)
             .setName('Debug logging')
             .setDesc('Enable debug logging to the console for troubleshooting.')
