@@ -1,4 +1,4 @@
-I made this plugin for quicker date adding and editing without needing to perfectly type out the date each time. I tried using the default obsidian date picker, but I wasn't super impresssed with it so I made my own.
+I made this plugin for quicker date adding and editing without needing to perfectly type out the date each time. I tried using the default obsidian date picker, but I wasn't super impressed with it so I made my own.
 
 ## Clicking on dates
 ![alt text](<README gifs/Clicking on dates to change them.gif>)
@@ -23,4 +23,5 @@ Also supports other common date formats. The inserted date format will be based 
 ### To-do:
 - relative dates (i.e. tomorrow, next Friday, etc.)
 
-
+#### Notes:
+- I'm not changing the styling of the text. Dates are simply italicized. The theme i'm using, [Border](https://github.com/Akifyss/obsidian-border), changes italicized text to an orange color.
