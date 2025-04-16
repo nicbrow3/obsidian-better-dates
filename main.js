@@ -68,7 +68,14 @@ var DateSelectorPlugin = class extends import_obsidian.Plugin {
       }
       const line = editor.getLine(replaceEnd.line);
       const hasSpaceAfter = line.length > replaceEnd.ch && line[replaceEnd.ch] === " ";
-      editor.replaceRange(formattedDate + (hasSpaceAfter ? "" : " "), replaceStart, replaceEnd);
+      const dateWithSpace = formattedDate + (hasSpaceAfter ? "" : " ");
+      editor.replaceRange(dateWithSpace, replaceStart, replaceEnd);
+      const newCursorPos = {
+        line: replaceStart.line,
+        // When editing, ensure cursor is after the space, not on it
+        ch: replaceStart.ch + dateWithSpace.length + (hasSpaceAfter ? 1 : 0)
+      };
+      editor.setCursor(newCursorPos);
     }).open();
   }
   async handleClickEvent(evt) {
@@ -108,7 +115,9 @@ var DateSelectorPlugin = class extends import_obsidian.Plugin {
           evt.preventDefault();
           evt.stopPropagation();
           const initialDate = (0, import_obsidian.moment)(foundDate, "MM/DD/YY").format("YYYY-MM-DD");
-          this.openDateModal(editor, initialDate, { line: pos.line, ch: start }, { line: pos.line, ch: end });
+          const replaceStart = { line: pos.line, ch: start };
+          const replaceEnd = { line: pos.line, ch: end };
+          this.openDateModal(editor, initialDate, replaceStart, replaceEnd);
         } else {
           this.debugLog("Date Selector Plugin: No date found at click position.");
         }
@@ -534,9 +543,11 @@ var DateSuggester = class extends import_obsidian.EditorSuggest {
   }
 };
 var DateSelectorModal = class extends import_obsidian.Modal {
-  // Store the focused date for keyboard navigation
+  // New flag to control focus styling
   constructor(plugin, app, initialDateYYYYMMDD, onSubmit) {
     super(app);
+    // Store the focused date for keyboard navigation
+    this.suppressFocus = false;
     this.plugin = plugin;
     this.initialDateYYYYMMDD = initialDateYYYYMMDD;
     this.onSubmit = onSubmit;
@@ -565,10 +576,14 @@ var DateSelectorModal = class extends import_obsidian.Modal {
         const nextBtn = header.createEl("button", { text: ">", cls: "calendar-nav-btn" });
         prevBtn.onclick = () => {
           currentMonth = currentMonth.clone().subtract(1, "month");
+          this.focusedDate = currentMonth.clone().startOf("month");
+          this.suppressFocus = true;
           renderCalendar();
         };
         nextBtn.onclick = () => {
           currentMonth = currentMonth.clone().add(1, "month");
+          this.focusedDate = currentMonth.clone().startOf("month");
+          this.suppressFocus = true;
           renderCalendar();
         };
         const daysRow = calendarContainer.createEl("div", { cls: "calendar-days-row" });
@@ -592,29 +607,39 @@ var DateSelectorModal = class extends import_obsidian.Modal {
             const date = gridStart.clone().add(week * 7 + day, "days");
             const dateStr = date.format("YYYY-MM-DD");
             const isCurrentMonth = date.month() === currentMonth.month();
+            const isWeekend = day === 0 || day === 6;
+            const isSelected = dateStr === this.selectedDateYYYYMMDD;
+            const isInitial = this.initialDateYYYYMMDD && dateStr === this.initialDateYYYYMMDD;
+            const isToday = date.isSame((0, import_obsidian.moment)(), "day");
+            const isFocused = dateStr === this.focusedDate.format("YYYY-MM-DD");
             const dateBtn = weekRow.createEl("button", { text: String(date.date()), cls: "calendar-date-btn" });
-            if (day === 0 || day === 6) {
+            if (isWeekend) {
               dateBtn.addClass("calendar-date-weekend");
             }
-            if (!isCurrentMonth) {
+            dateBtn.removeAttribute("data-focused-date");
+            if (isCurrentMonth) {
+              if (isSelected) {
+                dateBtn.addClass("calendar-date-selected");
+              }
+              if (isInitial) {
+                dateBtn.addClass("calendar-date-initial");
+              }
+              if (isToday) {
+                dateBtn.addClass("calendar-date-today");
+              }
+              if (isFocused && !this.suppressFocus) {
+                dateBtn.addClass("calendar-date-focused");
+                dateBtn.setAttr("data-focused-date", "true");
+              }
+            } else {
               dateBtn.addClass("calendar-date-outside");
             }
-            if (dateStr === this.selectedDateYYYYMMDD) {
-              dateBtn.addClass("calendar-date-selected");
-            }
-            dateBtn.removeAttribute("data-focused-date");
-            if (dateStr === this.focusedDate.format("YYYY-MM-DD")) {
-              dateBtn.addClass("calendar-date-focused");
-              dateBtn.setAttr("data-focused-date", "true");
-            }
-            if (date.isSame((0, import_obsidian.moment)(), "day")) {
-              dateBtn.addClass("calendar-date-today");
-            }
             dateBtn.onclick = () => {
+              this.suppressFocus = false;
               if (!date.isSame(currentMonth, "month")) {
-                this.selectedDateYYYYMMDD = dateStr;
                 this.focusedDate = date.clone();
-                currentMonth = date.clone();
+                currentMonth = date.clone().startOf("month");
+                this.selectedDateYYYYMMDD = dateStr;
                 updateSelectedDateHeader();
                 renderCalendar();
                 return;
@@ -622,6 +647,7 @@ var DateSelectorModal = class extends import_obsidian.Modal {
               this.selectedDateYYYYMMDD = dateStr;
               this.focusedDate = date.clone();
               updateSelectedDateHeader();
+              renderCalendar();
             };
             dateBtn.ondblclick = () => {
               this.selectedDateYYYYMMDD = dateStr;
@@ -643,6 +669,7 @@ var DateSelectorModal = class extends import_obsidian.Modal {
       const handleKeyDown = (evt) => {
         let handled = false;
         if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(evt.key)) {
+          this.suppressFocus = false;
           let newFocus = this.focusedDate.clone();
           if (evt.key === "ArrowLeft") newFocus.subtract(1, "day");
           if (evt.key === "ArrowRight") newFocus.add(1, "day");
@@ -815,23 +842,44 @@ var DateSelectorModal = class extends import_obsidian.Modal {
                     background: rgba(30, 30, 45, 0.85) !important;
                     color: #9992b8 !important;
                 }
-                .calendar-date-btn:hover, .calendar-date-btn:focus { 
-                    background: rgba(164, 140, 255, 0.2) !important; 
-                    color: var(--text-normal, #fff) !important; 
-                    outline: none; 
-                    box-shadow: 0 0 0 2px var(--date-selector-accent, rgba(164, 140, 255, 0.4)) !important; 
+                /* Hover state - subtle neutral background */
+                .calendar-date-btn:hover {
+                    background: rgba(128, 128, 128, 0.2) !important;
+                    color: var(--text-normal, #fff) !important; /* Keep text color consistent on hover */
+                    /* Remove box-shadow from hover */
                 }
-                .calendar-date-selected { 
-                    background: var(--date-selector-accent) !important; 
-                    color: var(--text-normal, #fff) !important; 
-                    font-weight: 700; 
-                    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) !important;
-                }
-                .calendar-date-today { 
-                    border: 2px solid var(--date-selector-today-border) !important; 
-                }
-                .calendar-date-focused { 
+                /* Focus state (keyboard nav or click/tab) - accent shadow ONLY */
+                .calendar-date-btn:focus,
+                .calendar-date-focused { /* Applied via JS for keyboard nav state */
+                    outline: none !important; /* Remove default outline */
                     box-shadow: 0 0 0 2px var(--date-selector-accent, rgba(164, 140, 255, 0.6)) !important;
+                    /* Do not change background on focus alone */
+                }
+                /* Selected state - purple border */
+                /* Selected state - bright accent background */
+                .calendar-date-selected { 
+                    /* border: 2px solid var(--date-selector-accent) !important; */ /* Use accent border */
+                    background: var(--date-selector-accent) !important; /* Use accent background */
+                    color: var(--text-normal, #fff) !important; 
+                    font-weight: 700 !important; 
+                    /* box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) !important; */ /* Remove inner shadow */
+                    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) !important; /* Restore subtle inner shadow */
+                }
+                /* Selected AND Focused - keep selected border, add focus shadow */
+                /* Selected AND Focused - keep selected background, add focus shadow */
+                .calendar-date-selected:focus {
+                    /* border: 2px solid var(--date-selector-accent) !important; */ /* Keep selected border */
+                    background: var(--date-selector-accent) !important; /* Keep selected background */
+                    color: var(--text-normal, #fff) !important; /* Maintain selected text color */
+                    box-shadow: 0 0 0 2px var(--date-selector-accent, rgba(164, 140, 255, 0.6)) !important; /* Ensure focus ring */
+                }
+                /* Today state - distinct border */
+                .calendar-date-today { 
+                    border: 2px solid var(--text-muted, #888888) !important; /* Use a distinct grey border */
+                }
+                /* Initial Date state (the one being edited) - distinct border */
+                .calendar-date-initial {
+                    border: 2px solid var(--date-selector-accent) !important;
                 }
                 /* Full-width button styling */
                 .date-selector-modal .setting-item {
@@ -849,6 +897,7 @@ var DateSelectorModal = class extends import_obsidian.Modal {
                     height: 2.5em;
                     font-size: 1.05em;
                     font-weight: 500;
+                    border-radius: 6px;
                 }
             `;
       contentEl.appendChild(style);

@@ -81,7 +81,16 @@ export default class DateSelectorPlugin extends Plugin {
             const line = editor.getLine(replaceEnd.line);
             const hasSpaceAfter = line.length > replaceEnd.ch && line[replaceEnd.ch] === ' ';
             
-            editor.replaceRange(formattedDate + (hasSpaceAfter ? '' : ' '), replaceStart, replaceEnd);
+            const dateWithSpace = formattedDate + (hasSpaceAfter ? '' : ' ');
+            editor.replaceRange(dateWithSpace, replaceStart, replaceEnd);
+            
+            // Set cursor position after the date and space (one more character to the right)
+            const newCursorPos = { 
+                line: replaceStart.line, 
+                // When editing, ensure cursor is after the space, not on it
+                ch: replaceStart.ch + dateWithSpace.length + (hasSpaceAfter ? 1 : 0)
+            };
+            editor.setCursor(newCursorPos);
         }).open();
     }
 
@@ -141,7 +150,12 @@ export default class DateSelectorPlugin extends Plugin {
 
                     // Convert MM/DD/YY back to YYYY-MM-DD for the modal
                     const initialDate = moment(foundDate, 'MM/DD/YY').format('YYYY-MM-DD');
-                    this.openDateModal(editor, initialDate, { line: pos.line, ch: start }, { line: pos.line, ch: end });
+                    
+                    // Create exact position to ensure cursor positioning works properly when editing
+                    const replaceStart = { line: pos.line, ch: start };
+                    const replaceEnd = { line: pos.line, ch: end };
+                    
+                    this.openDateModal(editor, initialDate, replaceStart, replaceEnd);
                 } else {
                     this.debugLog("Date Selector Plugin: No date found at click position.");
                 }
@@ -436,7 +450,7 @@ class DateSuggester extends EditorSuggest<DateSuggestion> {
                     const month = parseInt(numericParts[0], 10);
                     const day = parseInt(numericParts[1], 10);
                     if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-                        parsedDate = moment({ year: now.year(), month: month - 1, day });
+                        parsedDate = moment({ year: now.year(), month: month - 1, day: day });
                     }
                 } else if (numericParts.length === 3) {
                     // Try MM-DD-YY, MM-DD-YYYY, DD-MM-YY, etc.
@@ -627,6 +641,7 @@ class DateSelectorModal extends Modal {
     onSubmit: (resultYYYYMMDD: string) => void; // Returns YYYY-MM-DD
     selectedDateYYYYMMDD: string; // Store the picked date internally as YYYY-MM-DD
     focusedDate: moment.Moment; // Store the focused date for keyboard navigation
+    suppressFocus: boolean = false; // New flag to control focus styling
 
     constructor(plugin: DateSelectorPlugin, app: App, initialDateYYYYMMDD: string | null, onSubmit: (resultYYYYMMDD: string) => void) {
         super(app);
@@ -678,10 +693,16 @@ class DateSelectorModal extends Modal {
 
                 prevBtn.onclick = () => {
                     currentMonth = currentMonth.clone().subtract(1, 'month');
+                    // Set focus to startOf month but suppress the visible focus highlighting
+                    this.focusedDate = currentMonth.clone().startOf('month');
+                    this.suppressFocus = true; // Suppress focus highlighting after month change
                     renderCalendar();
                 };
                 nextBtn.onclick = () => {
                     currentMonth = currentMonth.clone().add(1, 'month');
+                    // Set focus to startOf month but suppress the visible focus highlighting
+                    this.focusedDate = currentMonth.clone().startOf('month');
+                    this.suppressFocus = true; // Suppress focus highlighting after month change
                     renderCalendar();
                 };
 
@@ -714,43 +735,62 @@ class DateSelectorModal extends Modal {
                         const date = gridStart.clone().add(week * 7 + day, 'days');
                         const dateStr = date.format('YYYY-MM-DD');
                         const isCurrentMonth = date.month() === currentMonth.month();
+                        const isWeekend = day === 0 || day === 6; // Determine if it's a weekend
+                        const isSelected = dateStr === this.selectedDateYYYYMMDD;
+                        const isInitial = this.initialDateYYYYMMDD && dateStr === this.initialDateYYYYMMDD;
+                        const isToday = date.isSame(moment(), 'day');
+                        const isFocused = dateStr === this.focusedDate.format('YYYY-MM-DD');
+
                         const dateBtn = weekRow.createEl('button', { text: String(date.date()), cls: 'calendar-date-btn' });
-                        
-                        // Add weekend class to Saturday and Sunday
-                        if (day === 0 || day === 6) {
+
+                        // Add base weekend class regardless of month, CSS handles the difference
+                        if (isWeekend) {
                             dateBtn.addClass('calendar-date-weekend');
                         }
-                        
-                        if (!isCurrentMonth) {
-                            dateBtn.addClass('calendar-date-outside');
-                        }
-                        if (dateStr === this.selectedDateYYYYMMDD) {
-                            dateBtn.addClass('calendar-date-selected');
-                        }
-                        // Remove data-focused-date from all buttons before setting
+
+                        // Remove focus attribute initially, will be added back if needed
                         dateBtn.removeAttribute('data-focused-date');
-                        if (dateStr === this.focusedDate.format('YYYY-MM-DD')) {
-                            dateBtn.addClass('calendar-date-focused');
-                            dateBtn.setAttr('data-focused-date', 'true');
+
+                        if (isCurrentMonth) {
+                            // Apply status classes only for dates within the current month
+                            if (isSelected) {
+                                dateBtn.addClass('calendar-date-selected');
+                            }
+                            if (isInitial) {
+                                dateBtn.addClass('calendar-date-initial');
+                            }
+                            if (isToday) {
+                                dateBtn.addClass('calendar-date-today');
+                            }
+                            // Only add focus class if suppressFocus is false
+                            if (isFocused && !this.suppressFocus) {
+                                dateBtn.addClass('calendar-date-focused');
+                                dateBtn.setAttr('data-focused-date', 'true');
+                            }
+                        } else {
+                            // Apply only the 'outside' class for dates not in the current month
+                            dateBtn.addClass('calendar-date-outside');
+                            // Note: The weekend class added earlier will combine with 'outside' via CSS
+                            // No selected, initial, today, or focused styles/attributes for outside dates.
                         }
-                        if (date.isSame(moment(), 'day')) {
-                            dateBtn.addClass('calendar-date-today');
-                        }
+
                         dateBtn.onclick = () => {
-                            // If the clicked date is outside the current month, update selection and focus before switching months
+                            // When any date is clicked, enable focus again
+                            this.suppressFocus = false;
+                            
+                            // Existing logic for clicking inside vs outside current month
                             if (!date.isSame(currentMonth, 'month')) {
-                                this.selectedDateYYYYMMDD = dateStr;
                                 this.focusedDate = date.clone();
-                                currentMonth = date.clone();
+                                currentMonth = date.clone().startOf('month');
+                                this.selectedDateYYYYMMDD = dateStr;
                                 updateSelectedDateHeader();
                                 renderCalendar();
                                 return;
                             }
-                            // Always update selected date and header
                             this.selectedDateYYYYMMDD = dateStr;
                             this.focusedDate = date.clone();
                             updateSelectedDateHeader();
-                            // Visually highlight selection (handled by re-render if month changed)
+                            renderCalendar();
                         };
 
                         // Add double-click handler to confirm date
@@ -777,6 +817,9 @@ class DateSelectorModal extends Modal {
             const handleKeyDown = (evt: KeyboardEvent) => {
                 let handled = false;
                 if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(evt.key)) {
+                    // When keyboard navigation is used, enable focus again
+                    this.suppressFocus = false;
+                    
                     let newFocus = this.focusedDate.clone();
                     if (evt.key === 'ArrowLeft') newFocus.subtract(1, 'day');
                     if (evt.key === 'ArrowRight') newFocus.add(1, 'day');
@@ -952,23 +995,44 @@ class DateSelectorModal extends Modal {
                     background: rgba(30, 30, 45, 0.85) !important;
                     color: #9992b8 !important;
                 }
-                .calendar-date-btn:hover, .calendar-date-btn:focus { 
-                    background: rgba(164, 140, 255, 0.2) !important; 
-                    color: var(--text-normal, #fff) !important; 
-                    outline: none; 
-                    box-shadow: 0 0 0 2px var(--date-selector-accent, rgba(164, 140, 255, 0.4)) !important; 
+                /* Hover state - subtle neutral background */
+                .calendar-date-btn:hover {
+                    background: rgba(128, 128, 128, 0.2) !important;
+                    color: var(--text-normal, #fff) !important; /* Keep text color consistent on hover */
+                    /* Remove box-shadow from hover */
                 }
-                .calendar-date-selected { 
-                    background: var(--date-selector-accent) !important; 
-                    color: var(--text-normal, #fff) !important; 
-                    font-weight: 700; 
-                    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) !important;
-                }
-                .calendar-date-today { 
-                    border: 2px solid var(--date-selector-today-border) !important; 
-                }
-                .calendar-date-focused { 
+                /* Focus state (keyboard nav or click/tab) - accent shadow ONLY */
+                .calendar-date-btn:focus,
+                .calendar-date-focused { /* Applied via JS for keyboard nav state */
+                    outline: none !important; /* Remove default outline */
                     box-shadow: 0 0 0 2px var(--date-selector-accent, rgba(164, 140, 255, 0.6)) !important;
+                    /* Do not change background on focus alone */
+                }
+                /* Selected state - purple border */
+                /* Selected state - bright accent background */
+                .calendar-date-selected { 
+                    /* border: 2px solid var(--date-selector-accent) !important; */ /* Use accent border */
+                    background: var(--date-selector-accent) !important; /* Use accent background */
+                    color: var(--text-normal, #fff) !important; 
+                    font-weight: 700 !important; 
+                    /* box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) !important; */ /* Remove inner shadow */
+                    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) !important; /* Restore subtle inner shadow */
+                }
+                /* Selected AND Focused - keep selected border, add focus shadow */
+                /* Selected AND Focused - keep selected background, add focus shadow */
+                .calendar-date-selected:focus {
+                    /* border: 2px solid var(--date-selector-accent) !important; */ /* Keep selected border */
+                    background: var(--date-selector-accent) !important; /* Keep selected background */
+                    color: var(--text-normal, #fff) !important; /* Maintain selected text color */
+                    box-shadow: 0 0 0 2px var(--date-selector-accent, rgba(164, 140, 255, 0.6)) !important; /* Ensure focus ring */
+                }
+                /* Today state - distinct border */
+                .calendar-date-today { 
+                    border: 2px solid var(--text-muted, #888888) !important; /* Use a distinct grey border */
+                }
+                /* Initial Date state (the one being edited) - distinct border */
+                .calendar-date-initial {
+                    border: 2px solid var(--date-selector-accent) !important;
                 }
                 /* Full-width button styling */
                 .date-selector-modal .setting-item {
@@ -986,6 +1050,7 @@ class DateSelectorModal extends Modal {
                     height: 2.5em;
                     font-size: 1.05em;
                     font-weight: 500;
+                    border-radius: 6px;
                 }
             `;
             contentEl.appendChild(style);
