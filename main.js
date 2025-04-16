@@ -61,7 +61,7 @@ var DateSelectorPlugin = class extends import_obsidian.Plugin {
   }
   // Helper function to open the modal, used by suggester and command
   openDateModal(editor, initialDateYYYYMMDD, replaceStart, replaceEnd) {
-    new DateSelectorModal(this.app, initialDateYYYYMMDD, (newDateYYYYMMDD) => {
+    new DateSelectorModal(this, this.app, initialDateYYYYMMDD, (newDateYYYYMMDD) => {
       let formattedDate = (0, import_obsidian.moment)(newDateYYYYMMDD, "YYYY-MM-DD").format(this.settings.dateFormat);
       if (!/^\*.*\*$/.test(formattedDate)) {
         formattedDate = `*${formattedDate}*`;
@@ -535,27 +535,24 @@ var DateSuggester = class extends import_obsidian.EditorSuggest {
 };
 var DateSelectorModal = class extends import_obsidian.Modal {
   // Store the focused date for keyboard navigation
-  constructor(app, initialDateYYYYMMDD, onSubmit) {
+  constructor(plugin, app, initialDateYYYYMMDD, onSubmit) {
     super(app);
+    this.plugin = plugin;
     this.initialDateYYYYMMDD = initialDateYYYYMMDD;
     this.onSubmit = onSubmit;
     this.selectedDateYYYYMMDD = (0, import_obsidian.moment)(this.initialDateYYYYMMDD, "YYYY-MM-DD", true).isValid() ? this.initialDateYYYYMMDD : (0, import_obsidian.moment)().format("YYYY-MM-DD");
     this.focusedDate = (0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD", true).isValid() ? (0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD") : (0, import_obsidian.moment)();
   }
   onOpen() {
-    var _a;
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("date-selector-modal");
-    contentEl.createEl("h2", { text: "Select a Date" });
-    const plugin = this.app.plugins.plugins["obsidian-date-selector"];
-    const useCustomCalendar = (_a = plugin == null ? void 0 : plugin.settings) == null ? void 0 : _a.useCustomCalendar;
+    contentEl.createEl("h2", { text: "Select a Date", cls: "calendar-modal-title" });
+    const useCustomCalendar = this.plugin.settings.useCustomCalendar;
     if (useCustomCalendar) {
       const calendarContainer = contentEl.createEl("div", { cls: "custom-calendar-container" });
       let currentMonth = (0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD", true).isValid() ? (0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD") : (0, import_obsidian.moment)();
       const selectedDateHeader = contentEl.createEl("div", { cls: "calendar-selected-date-header" });
-      selectedDateHeader.style.marginTop = "1.2em";
-      selectedDateHeader.style.marginBottom = "1em";
       const updateSelectedDateHeader = () => {
         selectedDateHeader.setText("Selected: " + (0, import_obsidian.moment)(this.selectedDateYYYYMMDD, "YYYY-MM-DD").format("MMM D, YYYY"));
       };
@@ -680,6 +677,15 @@ var DateSelectorModal = class extends import_obsidian.Modal {
       this.scope.register([], "Escape", handleKeyDown);
       const style = document.createElement("style");
       style.textContent = `
+                :root {
+                    --date-selector-accent: var(--interactive-accent, #a48cff);
+                    --date-selector-accent-light: #b3aaff;
+                    --date-selector-header: var(--text-accent, #fff);
+                    --date-selector-today-border: var(--interactive-accent, #a48cff);
+                    --date-selector-bg: var(--background-primary, #2a2a40);
+                    --date-selector-bg-secondary: var(--background-secondary, #23233a);
+                    --date-selector-bg-error: var(--background-modifier-error, #d43a3a);
+                }
                 .date-selector-modal {
                     width: auto !important;
                     max-width: none !important;
@@ -690,6 +696,10 @@ var DateSelectorModal = class extends import_obsidian.Modal {
                     display: flex;
                     flex-direction: column;
                     align-items: center;
+                }
+                .calendar-modal-title {
+                    color: var(--date-selector-header);
+                    margin-bottom: 0.5em;
                 }
                 .custom-calendar-container {
                     margin: 0 auto;
@@ -715,15 +725,16 @@ var DateSelectorModal = class extends import_obsidian.Modal {
                     font-size: 1.6em; 
                     cursor: pointer; 
                     padding: 0 0.7em; 
-                    color: #b3aaff; 
+                    color: var(--date-selector-accent-light); 
                     transition: color 0.15s; 
                 }
-                .calendar-nav-btn:hover { color: #a48cff; }
-                .calendar-month-year { font-weight: bold; font-size: 1.3em; letter-spacing: 0.02em; color: #fff; }
+                .calendar-nav-btn:hover { color: var(--date-selector-accent); }
+                .calendar-month-year { font-weight: bold; font-size: 1.3em; letter-spacing: 0.02em; color: var(--date-selector-header); }
                 .calendar-selected-date-header { 
+                    margin-top: 1.2em;
                     margin-bottom: 1em; 
                     font-size: 1.1em; 
-                    color: #6d7cff; 
+                    color: var(--date-selector-accent); 
                     width: 100%; 
                     text-align: left; 
                     box-sizing: border-box;
@@ -740,7 +751,7 @@ var DateSelectorModal = class extends import_obsidian.Modal {
                     box-sizing: border-box;
                     text-align: center; 
                     font-size: 1.1em; 
-                    color: #b3b3c6; 
+                    color: var(--text-faint, #b3b3c6); 
                     font-weight: 600; 
                     letter-spacing: 0.01em; 
                     display: flex; 
@@ -749,7 +760,7 @@ var DateSelectorModal = class extends import_obsidian.Modal {
                     height: 2.2em;
                 }
                 .calendar-day-label-weekend {
-                    color: #a48cff;
+                    color: var(--date-selector-accent);
                 }
                 .calendar-dates-grid { 
                     display: grid; 
@@ -770,7 +781,6 @@ var DateSelectorModal = class extends import_obsidian.Modal {
                     height: 2.6em; 
                     box-sizing: border-box; 
                 }
-                
                 /* Base date button - current month weekday (lightest) */
                 .calendar-date-btn { 
                     width: 2.6em;
@@ -782,7 +792,7 @@ var DateSelectorModal = class extends import_obsidian.Modal {
                     cursor: pointer; 
                     transition: background 0.15s, color 0.15s, box-shadow 0.15s; 
                     font-size: 1.1em; 
-                    color: #e3e3f7; 
+                    color: var(--text-normal, #e3e3f7); 
                     font-weight: 500; 
                     display: flex; 
                     align-items: center; 
@@ -790,59 +800,49 @@ var DateSelectorModal = class extends import_obsidian.Modal {
                     box-sizing: border-box;
                     overflow: hidden;
                 }
-                
                 /* Current month weekend (darker than weekday) */
                 .calendar-date-weekend {
                     background: rgba(50, 45, 75, 0.65) !important;
-                    color: #c8c3f5 !important;
+                    color: var(--date-selector-accent-light) !important;
                 }
-                
                 /* Surrounding months weekday (darker than current month weekend) */
                 .calendar-date-outside { 
-                    color: #aaa !important; 
+                    color: var(--text-faint, #aaa) !important; 
                     background: rgba(45, 45, 55, 0.65) !important;
                 }
-                
                 /* Surrounding months weekend (darkest) */
                 .calendar-date-outside.calendar-date-weekend {
                     background: rgba(30, 30, 45, 0.85) !important;
                     color: #9992b8 !important;
                 }
-                
                 .calendar-date-btn:hover, .calendar-date-btn:focus { 
                     background: rgba(164, 140, 255, 0.2) !important; 
-                    color: #fff !important; 
+                    color: var(--text-normal, #fff) !important; 
                     outline: none; 
-                    box-shadow: 0 0 0 2px rgba(164, 140, 255, 0.4) !important; 
+                    box-shadow: 0 0 0 2px var(--date-selector-accent, rgba(164, 140, 255, 0.4)) !important; 
                 }
-                
                 .calendar-date-selected { 
-                    background: #a48cff !important; 
-                    color: #fff !important; 
+                    background: var(--date-selector-accent) !important; 
+                    color: var(--text-normal, #fff) !important; 
                     font-weight: 700; 
                     box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) !important;
                 }
-                
                 .calendar-date-today { 
-                    border: 2px solid #a48cff !important; 
+                    border: 2px solid var(--date-selector-today-border) !important; 
                 }
-                
                 .calendar-date-focused { 
-                    box-shadow: 0 0 0 2px rgba(164, 140, 255, 0.6) !important;
+                    box-shadow: 0 0 0 2px var(--date-selector-accent, rgba(164, 140, 255, 0.6)) !important;
                 }
-
                 /* Full-width button styling */
                 .date-selector-modal .setting-item {
                     width: 100%;
                     border-top: none;
                     padding: 0;
                 }
-                
                 .date-selector-modal .setting-item-control {
                     width: 100%;
                     justify-content: center;
                 }
-                
                 .date-selector-modal .setting-item-control button {
                     width: 100%;
                     margin: 0;
@@ -893,8 +893,7 @@ var DateSelectorSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Date Selector Settings" });
-    new import_obsidian.Setting(containerEl).setName("Date Format").setDesc("Choose the format for inserted dates.").addDropdown(
+    new import_obsidian.Setting(containerEl).setName("Date format").setDesc("Choose the format for inserted dates.").addDropdown(
       (drop) => drop.addOption("MM/DD/YY", "02/25/25").addOption("MM-DD-YY", "02-25-25").addOption("YYYY-MM-DD", "2025-02-25").addOption("DD/MM/YYYY", "25/02/2025").addOption("MM/DD/YYYY", "02/25/2025").addOption("MMM D, YYYY", "Feb 25, 2025").addOption("MMMM D, YYYY", "February 25, 2025").setValue(this.plugin.settings.dateFormat).onChange(async (value) => {
         this.plugin.settings.dateFormat = value;
         await this.plugin.saveData(this.plugin.settings);
