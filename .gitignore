@@ -1,0 +1,15 @@
+# Compiled output
+main.js
+*.js.map
+
+# Dependency directories
+node_modules/
+
+# Editor and OS artifacts
+.DS_Store
+.vscode/
+*.swp
+*~
+
+# Plugin specific
+data.json 
